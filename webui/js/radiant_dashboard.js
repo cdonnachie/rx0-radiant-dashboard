@@ -38,6 +38,16 @@ var RXD_BRIDGE_BASE = location.protocol + '//' + location.hostname +
 var RXD_BRIDGE_URL = RXD_BRIDGE_BASE + '/chipinfo';
 var RXD_HISTORY_URL = RXD_BRIDGE_BASE + '/history?hours=24&points=288';
 var RXD_CHIPHISTORY_URL = RXD_BRIDGE_BASE + '/chiphistory?hours=24&points=288';
+
+/* Both history series append live samples roughly once a minute - the chip
+   charts on their own 60 s interval, the board charts from the stock refresh
+   hook - and in each case two can land close together, from a manual refresh
+   or a double fire. Half a minute is well under either interval and well over
+   the jitter, so this drops the duplicate without ever dropping a real sample.
+
+   Both guards used to compare 'HH:MM' strings, which did the same job only
+   because the points were minute-resolution strings to begin with. */
+var RXD_MIN_SAMPLE_GAP_MS = 30000;
 var RXD_CLOCK_URL = RXD_BRIDGE_BASE + '/clock';
 var RXD_SETCLOCK_URL = RXD_BRIDGE_BASE + '/setclock';
 var RXD_FAN_URL = RXD_BRIDGE_BASE + '/fan';
@@ -173,11 +183,23 @@ function rxdHashrateGH(data) {
 	return rxdParseHashrate(data.rtpow);
 }
 
-// _v2 key: anything saved under the old one holds hashrate in raw H/s, from
-// before rxdHashrateGH, and would show up as a 10^9 spike on the new chart.
+/* _v2 held hashrate in raw H/s, from before rxdHashrateGH, and would show up
+   as a 10^9 spike on the new chart. _v3 is _v2 with epoch-millisecond
+   timestamps instead of 'HH:MM' strings.
+
+   Dropping _v2 rather than converting it is the point, not laziness. Those
+   labels carry no date, and the array was stitched from whatever sessions
+   this browser happened to have open, so a reading taken days ago sat beside
+   today's with nothing to say so. That is how five sensor misreads from
+   October 3rd-6th came to be drawn as spikes at "13:29" on the 16th. An
+   instant cannot be recovered from an HH:MM, so the only honest thing to do
+   with the old blob is discard it. */
+var RXD_HIST_STORE = 'rxd_history_v3';
+
 function rxdLoadHistory() {
 	try {
-		var saved = localStorage.getItem('rxd_history_v2');
+		localStorage.removeItem('rxd_history_v2');
+		var saved = localStorage.getItem(RXD_HIST_STORE);
 		if (saved) {
 			var parsed = JSON.parse(saved);
 			if (parsed && parsed.timestamps && parsed.timestamps.length > 0) {
@@ -189,7 +211,7 @@ function rxdLoadHistory() {
 
 function rxdSaveHistory() {
 	try {
-		localStorage.setItem('rxd_history_v2', JSON.stringify(RXD.history));
+		localStorage.setItem(RXD_HIST_STORE, JSON.stringify(RXD.history));
 	} catch(e) {}
 }
 
@@ -201,15 +223,18 @@ function rxdRecordData(data) {
 
 	if (!data) return;
 
-	var now = new Date();
-	var ts = ('0'+now.getHours()).slice(-2) + ':' + ('0'+now.getMinutes()).slice(-2);
-
+	var ts = Date.now();
 	var h = RXD.history;
+	var last = h.timestamps[h.timestamps.length - 1];
 
-	// Collapse repeat samples within the same minute
-	if (h.timestamps.length > 0 && h.timestamps[h.timestamps.length-1] === ts) {
-		return;
-	}
+	// A legacy 'HH:MM' tail is from the miner's clock or an older session.
+	// Appending instants to it is the bug this replaced, so leave it for the
+	// next seed to overwrite.
+	if (h.timestamps.length > 0 && typeof last !== 'number') return;
+
+	// Collapse repeat samples: the stock hook can fire more than once per
+	// refresh. Was a same-minute string comparison, which this generalises.
+	if (typeof last === 'number' && ts - last < RXD_MIN_SAMPLE_GAP_MS) return;
 
 	h.timestamps.push(ts);
 	h.hashrate.push(Math.round(rxdHashrateGH(data) * 100) / 100);
@@ -244,6 +269,23 @@ function rxdRecordData(data) {
 function rxdClock(ms) {
 	var d = new Date(ms);
 	return ('0' + d.getHours()).slice(-2) + ':' + ('0' + d.getMinutes()).slice(-2);
+}
+
+/* The chart x-axis is categories, so it wants strings. Both rows of charts
+   store instants and render them here, in the viewer's clock, at draw time.
+
+   Legacy 'HH:MM' values pass through untouched rather than being mangled: a
+   bridge older than this file sends them for /chiphistory, already rendered
+   in the miner's clock, and an un-upgraded miner keeps the charts it had. */
+function rxdTimeLabels(h) {
+	return ((h && h.timestamps) || []).map(function(t) {
+		return typeof t === 'number' ? rxdClock(t) : t;
+	});
+}
+
+function rxdTimesAreEpoch(h) {
+	return !!(h && h.timestamps && h.timestamps.length &&
+	          typeof h.timestamps[0] === 'number');
 }
 
 /* How far a series may be snapped, derived from the series itself.
@@ -311,13 +353,16 @@ function rxdSeedHistory(payload) {
 		var t2 = rxdSnap(board.pcbtemp2, when, cursors.t2, windows.t2);
 		var fan = rxdSnap(payload.fans, when, cursors.fan, windows.fan);
 
-		seeded.timestamps.push(rxdClock(when));
+		// The instant, not a label. rxdTimeLabels renders it at draw time.
+		seeded.timestamps.push(when);
 		seeded.hashrate.push(point[1]);
 		seeded.temp1.push(rxdGap(t1 && t1[1]));
 		seeded.temp2.push(rxdGap(t2 && t2[1]));
 		seeded.fan1.push(rxdGap(fan && fan[1]));
 		seeded.fan2.push(rxdGap(fan && fan[2]));
 	});
+
+	rxdCarryTail(RXD.history, seeded, ['hashrate', 'temp1', 'temp2', 'fan1', 'fan2']);
 
 	while (seeded.timestamps.length > RXD.maxPoints) {
 		for (var k in seeded) seeded[k].shift();
@@ -327,6 +372,39 @@ function rxdSeedHistory(payload) {
 	rxdSaveHistory();
 	return true;
 }
+
+/* Append the local points the replay does not cover yet, so a re-seed cannot
+   make the chart jump backwards. The flat parallel-array counterpart of
+   rxdCarryChipTail; `keys` names the series beside `timestamps`.
+
+   Both sides must be on epoch time for "newer" to mean anything. A legacy
+   'HH:MM' local copy is simply dropped, which is what a re-seed is for. */
+function rxdCarryTail(local, fresh, keys) {
+	if (!rxdTimesAreEpoch(local) || !rxdTimesAreEpoch(fresh)) return;
+
+	var last = fresh.timestamps[fresh.timestamps.length - 1];
+	for (var i = 0; i < local.timestamps.length; i++) {
+		if (local.timestamps[i] <= last) continue;
+		fresh.timestamps.push(local.timestamps[i]);
+		keys.forEach(function(k) {
+			var v = local[k] ? local[k][i] : null;
+			fresh[k].push(v === undefined ? null : v);
+		});
+	}
+}
+
+/* Re-fetched on a timer, not once per page load as it was.
+
+   The replay covers 24 h and the live tail keeps arriving above, so one fetch
+   looked like enough. It is not: live samples append about once a minute and
+   RXD.maxPoints is 288, so after roughly 4.8 hours the appends have evicted
+   every seeded point and the chart has quietly become "the last 4.8 hours
+   this tab was open" while still being labelled a day. Re-seeding restores
+   the real window; rxdCarryTail keeps the newest live points across it.
+
+   Five minutes matches the bridge's own sampling, so a fetch never costs more
+   than one sample's staleness. */
+var RXD_HISTORY_REFRESH_MS = 300000;
 
 function rxdFetchHistory() {
 	return $.ajax({ url: RXD_HISTORY_URL, type: 'GET', dataType: 'json', timeout: 20000 })
@@ -1211,21 +1289,6 @@ function rxdLoadChipHistory() {
 	} catch(e) {}
 }
 
-/* The chart x-axis is categories, so it wants strings. A bridge older than
-   this file still sends 'HH:MM' already rendered in the miner's clock; pass
-   those through untouched rather than mangling them, so an un-upgraded miner
-   keeps the charts it had. */
-function rxdChipLabels(h) {
-	return (h.timestamps || []).map(function(t) {
-		return typeof t === 'number' ? rxdClock(t) : t;
-	});
-}
-
-function rxdChipTimesAreEpoch(h) {
-	return !!(h && h.timestamps && h.timestamps.length &&
-	          typeof h.timestamps[0] === 'number');
-}
-
 /* localStorage is per-browser, so a dashboard opened somewhere new used to show
    three nearly empty chip charts beside a full day of board history. The bridge
    now records chip samples itself, so this replaces whatever this browser
@@ -1266,9 +1329,12 @@ function rxdFetchChipHistory() {
 
    Both sides must be on epoch time for "newer" to mean anything - against a
    pre-epoch bridge there is no common clock, so the server copy is simply
-   taken as it stands. */
+   taken as it stands.
+
+   rxdCarryTail does the same for the board history, whose series are flat
+   arrays beside the timestamps rather than nested under a board key. */
 function rxdCarryChipTail(local, h) {
-	if (!rxdChipTimesAreEpoch(local) || !rxdChipTimesAreEpoch(h)) return;
+	if (!rxdTimesAreEpoch(local) || !rxdTimesAreEpoch(h)) return;
 
 	var last = h.timestamps[h.timestamps.length - 1];
 	var keys = Object.keys(h.boards);
@@ -1312,13 +1378,6 @@ function rxdEmptyBoardSeries() {
 	};
 }
 
-/* Two fetches can land close together - the 60 s interval and a manual panel
-   refresh - and both record. Half a minute is well under that interval and
-   well over the jitter, so it drops the duplicate without ever dropping a
-   real sample. (The old guard compared 'HH:MM' strings, which did the same
-   job only because the points were minute-resolution strings to begin with.) */
-var RXD_CHIP_MIN_GAP_MS = 30000;
-
 function rxdRecordChipData(d) {
 	if (!d || !d.boards || !d.boards.length) return;
 
@@ -1332,7 +1391,7 @@ function rxdRecordChipData(d) {
 	// append would have added is the few minutes since the last 5-minute
 	// sample, and every page load re-fetches those anyway.
 	if (h.timestamps.length > 0 && typeof last !== 'number') return;
-	if (typeof last === 'number' && ts - last < RXD_CHIP_MIN_GAP_MS) return;
+	if (typeof last === 'number' && ts - last < RXD_MIN_SAMPLE_GAP_MS) return;
 
 	// A board bucket created after other boards already have history is
 	// back-filled with zeros so every board's arrays stay aligned with the
@@ -1442,7 +1501,7 @@ function rxdChipChart(container, title, yTitle, statKey, suffix) {
 		series.push({ name: 'Board' + bn + ' (max)', data: rxdChipSeries(b, statKey, 'Max'), color: colors.max });
 	});
 
-	return rxdMakeChart(container, title, yTitle, series, null, suffix, rxdChipLabels(h));
+	return rxdMakeChart(container, title, yTitle, series, null, suffix, rxdTimeLabels(h));
 }
 
 function rxdUpdateChipCharts() {
@@ -1475,7 +1534,7 @@ function rxdUpdateChipCharts() {
 	defs.forEach(function(d) {
 		var key = d[0], el = d[1], statKey = d[4];
 		if (RXD.charts[key] && RXD.charts[key].series.length === expectedSeries) {
-			RXD.charts[key].xAxis[0].setCategories(rxdChipLabels(h), false);
+			RXD.charts[key].xAxis[0].setCategories(rxdTimeLabels(h), false);
 			var si = 0;
 			boardNums.forEach(function(bn) {
 				var b = h.boards[bn];
@@ -2286,7 +2345,8 @@ function rxdCreateChartContainers() {
 }
 
 function rxdMakeChart(container, title, yTitle, series, yMin, ySuffix, categories) {
-	var cats = categories || RXD.history.timestamps;
+	// Instants in, labels out - rxdTimeLabels renders in the viewer's clock.
+	var cats = categories || rxdTimeLabels(RXD.history);
 	var opts = $.extend(true, {}, HC_DARK, {
 		chart: {
 			renderTo: container,
@@ -2367,7 +2427,7 @@ function rxdUpdateCharts() {
 	// seeded from the bridge's replay of the miner's logs, so it spans a day
 	// and across restarts.
 	if (RXD.charts.hash) {
-		RXD.charts.hash.xAxis[0].setCategories(h.timestamps, false);
+		RXD.charts.hash.xAxis[0].setCategories(rxdTimeLabels(h), false);
 		RXD.charts.hash.series[0].setData(h.hashrate, false);
 		RXD.charts.hash.redraw();
 	} else if ($('#rxd-hash-chart').length) {
@@ -2377,7 +2437,7 @@ function rxdUpdateCharts() {
 	}
 
 	if (RXD.charts.temp) {
-		RXD.charts.temp.xAxis[0].setCategories(h.timestamps, false);
+		RXD.charts.temp.xAxis[0].setCategories(rxdTimeLabels(h), false);
 		RXD.charts.temp.series[0].setData(h.temp1, false);
 		RXD.charts.temp.series[1].setData(h.temp2, false);
 		RXD.charts.temp.redraw();
@@ -2391,7 +2451,7 @@ function rxdUpdateCharts() {
 	}
 
 	if (RXD.charts.fan) {
-		RXD.charts.fan.xAxis[0].setCategories(h.timestamps, false);
+		RXD.charts.fan.xAxis[0].setCategories(rxdTimeLabels(h), false);
 		RXD.charts.fan.series[0].setData(h.fan1, false);
 		RXD.charts.fan.series[1].setData(h.fan2, false);
 		RXD.charts.fan.redraw();
@@ -2454,6 +2514,13 @@ function rxdInit() {
 	setTimeout(rxdRenderDayTile, 2500);
 	setInterval(rxdFetchPerformance, 300000);
 	RXD.chipInterval = setInterval(rxdFetchChipData, 60000);
+
+	// Both histories are re-seeded on a timer rather than once per load. Live
+	// samples append about once a minute against a 288-point cap, so a single
+	// seed is fully evicted after ~4.8 hours and the charts silently stop
+	// being the day they claim to be. See RXD_HISTORY_REFRESH_MS.
+	setInterval(rxdFetchHistory, RXD_HISTORY_REFRESH_MS);
+	setInterval(rxdFetchChipHistory, RXD_HISTORY_REFRESH_MS);
 
 	// Only alive while the miner is inside its 5-minute averaging window: the
 	// first tick stops the timer again if the page was opened any later than
