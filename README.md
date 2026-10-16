@@ -90,6 +90,8 @@ touched it.
 
 ## Overclocking: higher is not automatically faster
 
+![The Overclock page](docs/overclock.png)
+
 The chip clock lives in the hash board's EEPROM, which the miner reads at
 startup and ramps the chips to. Changing it means writing that EEPROM and
 rebooting - there is no way to apply it to a running miner, and the page says
