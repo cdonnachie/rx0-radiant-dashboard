@@ -33,6 +33,7 @@ function extract(name) {
 const RXD_SNAP_MS = 150000;
 eval(extract('rxdNum'));
 eval(extract('rxdGap'));
+eval(extract('rxdSnapWindow'));
 eval(extract('rxdSnap'));
 eval(extract('rxdPoolState'));
 
@@ -88,6 +89,46 @@ check('nothing was plotted at zero', seededFan1.filter(v => v === 0).length, 0);
 const sparse = [[t0, 1162], [t0 + 3600000, 1206]];
 check('no sample within the snap window is a gap too',
     rxdGap(rxdSnap(sparse, t0 + 1800000, {}) || null), null);
+
+console.log('');
+console.log('the snap tolerance must exceed HALF the sample interval');
+// The bridge logs every ~302 s. Half of that is 151 s, which is MORE than the
+// old fixed 150 s tolerance - so whenever a hashrate timestamp landed near the
+// midpoint between two fan readings, the adjacent reading was rejected and the
+// chart drew a gap (and before gaps, a dip to 0 rpm). It showed up as a null
+// every nineteenth point, roughly every 95 minutes, which is far too regular
+// to be a sensor.
+const STEP = 302000;
+const grid = [];
+for (let i = 0; i < 300; i++) grid.push([1792000000000 + i * STEP, 1162, 1117]);
+
+check('the window is derived from the series, not fixed',
+    rxdSnapWindow(grid), Math.round(STEP * 1.5));
+check('and it comfortably clears half an interval',
+    rxdSnapWindow(grid) > STEP / 2, true);
+check('the old fixed tolerance did NOT clear half an interval',
+    RXD_SNAP_MS > STEP / 2, false);
+
+// Ask at the worst possible phase: exactly between two readings.
+const worst = grid[10][0] + STEP / 2;
+check('at the midpoint the old tolerance rejects an adjacent reading',
+    rxdSnap(grid, worst, {}, RXD_SNAP_MS), null);
+check('the new one returns it', rxdSnap(grid, worst, {}, rxdSnapWindow(grid))[1], 1162);
+
+// Sweep every phase across one interval: nothing should ever be dropped.
+let dropped = 0;
+const win = rxdSnapWindow(grid);
+for (let off = 0; off < STEP; off += 1000) {
+    if (!rxdSnap(grid, grid[20][0] + off, {}, win)) dropped++;
+}
+check('no phase anywhere in the interval drops a reading', dropped, 0);
+
+// But a real hole must still gap: drop four readings and ask in the middle.
+const holed = grid.slice(0, 40).concat(grid.slice(45));
+check('a genuine hole is still a gap',
+    rxdSnap(holed, grid[42][0], {}, rxdSnapWindow(holed)), null);
+check('the hole does not widen the window for everyone else',
+    rxdSnapWindow(holed), Math.round(STEP * 1.5));
 
 console.log('');
 console.log('rxdPoolState: connecting is not disconnected');

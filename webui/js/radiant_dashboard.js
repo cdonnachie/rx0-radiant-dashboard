@@ -246,9 +246,36 @@ function rxdClock(ms) {
 	return ('0' + d.getHours()).slice(-2) + ':' + ('0' + d.getMinutes()).slice(-2);
 }
 
+/* How far a series may be snapped, derived from the series itself.
+ *
+ * The charts put every sensor on the hashrate series' timestamps, and the
+ * bridge does NOT sample them all on one timer: the fan log lands about every
+ * 286 s against the hashrate log's 303 s. Two grids that close drift past each
+ * other by ~17 s per step, so with a fixed tolerance the offset exceeds it
+ * roughly every nineteenth point and the nearest reading is rejected even
+ * though it is right there. That drew a null every 19 samples - a gap every
+ * ~95 minutes, suspiciously regular, and before nulls were gaps it drew a dip
+ * to 0 rpm instead, which is what it was first reported as.
+ *
+ * A fixed 150 s was always going to do this: it is just under half the sample
+ * interval, so the midpoint between two readings falls outside it. Scaling to
+ * the series' own median spacing removes the beat, while still leaving a gap
+ * for a genuinely missing reading, because a real hole is at least two
+ * intervals wide and 1.5 medians will not reach across it. */
+function rxdSnapWindow(points) {
+	if (!points || points.length < 3) return RXD_SNAP_MS;
+	var gaps = [];
+	for (var i = 1; i < points.length; i++) {
+		gaps.push(points[i][0] - points[i - 1][0]);
+	}
+	gaps.sort(function(a, b) { return a - b; });
+	// Median, so the reboot-sized holes in the series do not widen it.
+	return Math.max(RXD_SNAP_MS, Math.round(gaps[Math.floor(gaps.length / 2)] * 1.5));
+}
+
 // Points are [epoch ms, value] in ascending order. Walks forward from the
 // last hit, so seeding a whole window stays linear rather than quadratic.
-function rxdSnap(points, when, cursor) {
+function rxdSnap(points, when, cursor, window) {
 	if (!points || points.length === 0) return null;
 	var i = cursor.i || 0;
 	while (i + 1 < points.length &&
@@ -256,7 +283,7 @@ function rxdSnap(points, when, cursor) {
 		i++;
 	}
 	cursor.i = i;
-	return Math.abs(points[i][0] - when) <= RXD_SNAP_MS ? points[i] : null;
+	return Math.abs(points[i][0] - when) <= (window || RXD_SNAP_MS) ? points[i] : null;
 }
 
 function rxdSeedHistory(payload) {
@@ -270,12 +297,19 @@ function rxdSeedHistory(payload) {
 
 	var seeded = { timestamps: [], hashrate: [], temp1: [], temp2: [], fan1: [], fan2: [] };
 	var cursors = { t1: {}, t2: {}, fan: {} };
+	// Each series gets its own tolerance, computed once - they are logged on
+	// different timers and a shared constant beats against the difference.
+	var windows = {
+		t1: rxdSnapWindow(board.pcbtemp1),
+		t2: rxdSnapWindow(board.pcbtemp2),
+		fan: rxdSnapWindow(payload.fans)
+	};
 
 	hash.forEach(function(point) {
 		var when = point[0];
-		var t1 = rxdSnap(board.pcbtemp1, when, cursors.t1);
-		var t2 = rxdSnap(board.pcbtemp2, when, cursors.t2);
-		var fan = rxdSnap(payload.fans, when, cursors.fan);
+		var t1 = rxdSnap(board.pcbtemp1, when, cursors.t1, windows.t1);
+		var t2 = rxdSnap(board.pcbtemp2, when, cursors.t2, windows.t2);
+		var fan = rxdSnap(payload.fans, when, cursors.fan, windows.fan);
 
 		seeded.timestamps.push(rxdClock(when));
 		seeded.hashrate.push(point[1]);
