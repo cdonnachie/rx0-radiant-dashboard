@@ -29,6 +29,7 @@ caller may well run over a tree a previous boot already patched.
 
 import io
 import os
+import re
 import shutil
 import sys
 
@@ -238,7 +239,20 @@ def patch_base_js(web, build_id, log):
         return False
     content = read(path)
     if '_rxdContent3Hooked' in content:
-        log('base.js already hooked')
+        # The build id is what stops a browser serving a stale dashboard out of
+        # cache, and it was baked in when the hook was first appended. Updating
+        # an asset in a tree that is already hooked - which is exactly what
+        # installing a new version onto a running miner does - has to refresh
+        # it too, or the new file is on disk and nobody fetches it. A reboot
+        # would fix it by rebuilding the tree from scratch; requiring a reboot
+        # to see a web change is the thing this install path exists to avoid.
+        fixed, n = re.subn(r'(/(?:js/radiant_dashboard\.js|css/radiant\.css)\?v=)\d+',
+                           r'\g<1>' + build_id, content)
+        if n and fixed != content:
+            write(path, fixed)
+            log('base.js: cache id refreshed to %s (%d refs)' % (build_id, n))
+            return True
+        log('base.js already hooked at build %s' % build_id)
         return False
     write(path, content + BASE_JS_HOOK.replace('__RXD_BUILD__', build_id))
     log('base.js: dashboard hook added (build %s)' % build_id)

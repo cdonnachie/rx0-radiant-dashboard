@@ -140,6 +140,21 @@ function rxdNum(v) {
 	return isFinite(n) ? n : 0;
 }
 
+/* For charted sensors, where 0 is not a reading.
+ *
+ * A tach that reports 0 has not measured a stopped fan - it has failed to
+ * measure anything, and the two are indistinguishable from the outside. The
+ * same goes for a 0 degree chip. Plotting either as a value draws a cliff to
+ * the floor of the axis, which is how a miner that was merely rebooting ends
+ * up looking like one whose cooling died. null leaves a gap, which is what a
+ * missing reading actually is.
+ *
+ * Deliberately not used for hashrate: zero hashrate is a real measurement. */
+function rxdGap(v) {
+	var n = parseFloat(v);
+	return (isFinite(n) && n !== 0) ? n : null;
+}
+
 var RXD_UNIT_TO_GH = { H: 1e-9, K: 1e-6, M: 1e-3, G: 1, T: 1e3, P: 1e6 };
 
 /* Whole-miner hashrate in GH/s, whatever state the payload is in.
@@ -199,13 +214,15 @@ function rxdRecordData(data) {
 	h.timestamps.push(ts);
 	h.hashrate.push(Math.round(rxdHashrateGH(data) * 100) / 100);
 
+	// rxdGap, not rxdNum: the locally recorded history feeds the same charts,
+	// so a sensor that did not answer has to leave a gap here too.
 	var b = (data.boards && data.boards[0]) ? data.boards[0] : {};
-	h.temp1.push(rxdNum(b.intmp));
-	h.temp2.push(rxdNum(b.outtmp));
+	h.temp1.push(rxdGap(b.intmp));
+	h.temp2.push(rxdGap(b.outtmp));
 
 	var fans = data.fans || [];
-	h.fan1.push(rxdNum(fans[0]));
-	h.fan2.push(rxdNum(fans[1]));
+	h.fan1.push(rxdGap(fans[0]));
+	h.fan2.push(rxdGap(fans[1]));
 
 	while (h.timestamps.length > RXD.maxPoints) {
 		h.timestamps.shift(); h.hashrate.shift();
@@ -262,10 +279,10 @@ function rxdSeedHistory(payload) {
 
 		seeded.timestamps.push(rxdClock(when));
 		seeded.hashrate.push(point[1]);
-		seeded.temp1.push(t1 ? t1[1] : 0);
-		seeded.temp2.push(t2 ? t2[1] : 0);
-		seeded.fan1.push(fan ? fan[1] : 0);
-		seeded.fan2.push(fan ? fan[2] : 0);
+		seeded.temp1.push(rxdGap(t1 && t1[1]));
+		seeded.temp2.push(rxdGap(t2 && t2[1]));
+		seeded.fan1.push(rxdGap(fan && fan[1]));
+		seeded.fan2.push(rxdGap(fan && fan[2]));
 	});
 
 	while (seeded.timestamps.length > RXD.maxPoints) {
@@ -941,6 +958,39 @@ function rxdHealthValue(panel, selector, text) {
 	tag.text(text || '');
 }
 
+/* The pool pill's three states, as a pure decision so it can be tested.
+ *
+ * `connect` is 1 connected, 0 mid-connect, -1 never attempted. Only entries
+ * with an address count: the stock UI ships three slots and the unused ones
+ * sit at -1 forever, so counting those as failures reports a healthy miner as
+ * broken.
+ *
+ * Connecting gets its own pill rather than falling in with Disconnected. After
+ * a reboot the miner sits at 0 for a few seconds while it opens the socket,
+ * and painting that red is the same mistake as the stock warm-up state: it is
+ * alarming, it is wrong, and a red that cries wolf is a red you stop reading.
+ */
+function rxdPoolState(all) {
+	var pools = (all || []).filter(function(p) { return p.addr; });
+	function addrs(want) {
+		return pools.filter(function(p) { return rxdNum(p.connect) === want; })
+			.map(function(p) { return p.addr; }).join(', ');
+	}
+
+	if (pools.length === 0) {
+		return { text: '--', cls: '', title: 'No pool configured' };
+	}
+	if (pools.some(function(p) { return rxdNum(p.connect) === 1; })) {
+		return { text: 'Connected', cls: 'content2radiusGreencss', title: addrs(1) };
+	}
+	if (pools.some(function(p) { return rxdNum(p.connect) === 0; })) {
+		return { text: 'Connecting', cls: 'rxd-warmup-pill',
+			title: 'Opening the connection to ' + addrs(0) };
+	}
+	return { text: 'Disconnected', cls: 'content2radiusRedcss',
+		title: 'No configured pool is connected' };
+}
+
 function rxdRenderHealth(data) {
 	var panel = $('.right .content2 .panlcss').has('.speedcss').first();
 	if (panel.length === 0 || !data) return;
@@ -961,11 +1011,7 @@ function rxdRenderHealth(data) {
 	});
 	rxdHealthValue(panel, '.temcss', temps.length ? Math.round(Math.max.apply(null, temps)) + ' °C' : '');
 
-	// Pool: only count entries that are actually configured. The stock UI ships
-	// three slots and the unused ones sit at connect:-1 forever, so counting
-	// them as failures would show "1/3" on a perfectly healthy miner.
-	var pools = (data.pools || []).filter(function(p) { return p.addr; });
-	var up = pools.filter(function(p) { return p.connect === 1; }).length;
+	var state = rxdPoolState(data.pools);
 
 	$('.rxd-pool-row').not(panel.find('.rxd-pool-row')).remove();
 	var row = panel.find('.rxd-pool-row');
@@ -978,20 +1024,11 @@ function rxdRenderHealth(data) {
 		if (before.length) before.before(row); else panel.append(row);
 	}
 
-	var pill = row.find('.rxd-pool-pill');
-	if (pools.length === 0) {
-		pill.removeClass('content2radiusGreencss content2radiusRedcss')
-			.text('--').attr('title', 'No pool configured');
-	} else if (up > 0) {
-		pill.removeClass('content2radiusRedcss').addClass('content2radiusGreencss')
-			.text('Connected')
-			.attr('title', pools.filter(function(p) { return p.connect === 1; })
-				.map(function(p) { return p.addr; }).join(', '));
-	} else {
-		pill.removeClass('content2radiusGreencss').addClass('content2radiusRedcss')
-			.text('Disconnected')
-			.attr('title', 'No configured pool is connected');
-	}
+	row.find('.rxd-pool-pill')
+		.removeClass('content2radiusGreencss content2radiusRedcss rxd-warmup-pill')
+		.addClass(state.cls)
+		.text(state.text)
+		.attr('title', state.title);
 }
 
 /* Actual against what the cores and clock say the board should be producing -
