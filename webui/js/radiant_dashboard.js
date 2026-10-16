@@ -470,11 +470,13 @@ function rxdDayStats() {
 	// readback artefact (799 of 800) and the clock steps in 5 MHz, so round to
 	// 5 before counting distinct settings.
 	//
-	// Deliberately NOT paired with the hashrate series by timestamp: the bridge
-	// labels chip samples with the MINER's clock, which runs UTC, while
-	// rxdClock labels these with the BROWSER's. Those HH:MM strings differ by
-	// the viewer's UTC offset, so every lookup would miss and the per-clock
-	// figure below would silently never appear.
+	// Not paired with the hashrate series by timestamp. It used to be
+	// impossible - the bridge labelled chip samples with the MINER's clock
+	// while rxdClock labelled these with the BROWSER's, so every lookup missed
+	// by the viewer's UTC offset and the per-clock figure below silently never
+	// appeared. /chiphistory now returns epoch ms, so the two ARE comparable;
+	// the fractions below are kept because the series still have different
+	// cadences and thinnings, and matching by index costs nothing here.
 	var ch = RXD.chipHistory || {};
 	var boards = ch.boards || {};
 	var keys = Object.keys(boards);
@@ -1182,17 +1184,23 @@ function rxdBrandSidebar() {
 	}
 }
 
-// _v2 key: the per-board shape below is incompatible with the old flat
-// tempMin/tempAvg/tempMax format, so this intentionally doesn't load old data.
+/* _v2 was the per-board shape replacing a flat tempMin/tempAvg/tempMax one.
+   _v3 is the same shape with epoch-millisecond timestamps instead of 'HH:MM'
+   strings, so a v2 blob is dropped rather than loaded: its labels are a mix of
+   two clocks and cannot be converted back into instants. The old key is
+   cleared so it does not sit in storage forever. */
+var RXD_CHIP_STORE = 'rxd_chip_history_v3';
+
 function rxdSaveChipHistory() {
 	try {
-		localStorage.setItem('rxd_chip_history_v2', JSON.stringify(RXD.chipHistory));
+		localStorage.setItem(RXD_CHIP_STORE, JSON.stringify(RXD.chipHistory));
 	} catch(e) {}
 }
 
 function rxdLoadChipHistory() {
 	try {
-		var saved = localStorage.getItem('rxd_chip_history_v2');
+		localStorage.removeItem('rxd_chip_history_v2');
+		var saved = localStorage.getItem(RXD_CHIP_STORE);
 		if (saved) {
 			var parsed = JSON.parse(saved);
 			if (parsed && parsed.timestamps && parsed.timestamps.length > 0 && parsed.boards) {
@@ -1203,32 +1211,83 @@ function rxdLoadChipHistory() {
 	} catch(e) {}
 }
 
+/* The chart x-axis is categories, so it wants strings. A bridge older than
+   this file still sends 'HH:MM' already rendered in the miner's clock; pass
+   those through untouched rather than mangling them, so an un-upgraded miner
+   keeps the charts it had. */
+function rxdChipLabels(h) {
+	return (h.timestamps || []).map(function(t) {
+		return typeof t === 'number' ? rxdClock(t) : t;
+	});
+}
+
+function rxdChipTimesAreEpoch(h) {
+	return !!(h && h.timestamps && h.timestamps.length &&
+	          typeof h.timestamps[0] === 'number');
+}
+
 /* localStorage is per-browser, so a dashboard opened somewhere new used to show
    three nearly empty chip charts beside a full day of board history. The bridge
    now records chip samples itself, so this replaces whatever this browser
    happens to hold with the miner's own record - the same data everywhere, and
    it survives clearing the browser.
 
-   The server copy wins outright rather than being merged: both describe the
-   same miner, the server's is the longer and authoritative one, and merging two
-   differently-sampled series would only risk duplicate or out-of-order points.
-   Live samples keep appending to it afterwards exactly as before. */
+   The server copy is authoritative; only local points NEWER than its last
+   sample are carried over, which is the whole of what the local tail can
+   legitimately add.
+
+   This used to compare array LENGTHS and keep the local copy when it was
+   longer, meaning to preserve that tail. Length is the wrong measure: the
+   bridge samples every 5 minutes while an open tab appends every minute, so
+   the local array is five times denser and goes on winning while covering a
+   fifth of the time. Once it reached the 288-point cap it was longer than any
+   24 h the bridge could return, and the server copy was discarded on every
+   load, permanently. The symptom was three chip charts frozen on a previous
+   session's data, with a tick spacing that changed partway along where the
+   5-minute points gave way to 1-minute ones. */
 function rxdFetchChipHistory() {
 	return $.ajax({ url: RXD_CHIPHISTORY_URL, type: 'GET', dataType: 'json', timeout: 10000 })
 		.done(function(h) {
 			if (!h || !h.timestamps || h.timestamps.length === 0 || !h.boards) return;
 
-			// Keep the local tail if it is somehow ahead - the sampler writes
-			// every 5 minutes, so a browser left open can hold newer points.
-			var local = RXD.chipHistory;
-			if (local && local.timestamps && local.timestamps.length > h.timestamps.length) return;
-
 			rxdDropEmptyBoards(h);
+			rxdCarryChipTail(RXD.chipHistory, h);
 			RXD.chipHistory = h;
 			rxdSaveChipHistory();
 			rxdUpdateChipCharts();
 			rxdRenderDayTile();
 		});
+}
+
+/* Append the local points the server has not recorded yet. The sampler runs
+   every 5 minutes, so a tab left open always holds a few minutes the bridge
+   has not written; dropping them would make the charts jump backwards on
+   every reload.
+
+   Both sides must be on epoch time for "newer" to mean anything - against a
+   pre-epoch bridge there is no common clock, so the server copy is simply
+   taken as it stands. */
+function rxdCarryChipTail(local, h) {
+	if (!rxdChipTimesAreEpoch(local) || !rxdChipTimesAreEpoch(h)) return;
+
+	var last = h.timestamps[h.timestamps.length - 1];
+	var keys = Object.keys(h.boards);
+
+	for (var i = 0; i < local.timestamps.length; i++) {
+		if (local.timestamps[i] <= last) continue;
+		h.timestamps.push(local.timestamps[i]);
+		keys.forEach(function(key) {
+			var from = local.boards[key];
+			var into = h.boards[key];
+			for (var sk in into) {
+				// The server decides which boards exist. One it lists that the
+				// local copy never saw contributes a gap, not a zero - rxdGap's
+				// rule, and a chip at 0 mV is a lie.
+				var v = (from && from[sk]) ? from[sk][i] : null;
+				into[sk].push(v === undefined ? null : v);
+			}
+		});
+	}
 }
 
 // An empty board slot charted as a flat zero series would otherwise live in
@@ -1253,14 +1312,27 @@ function rxdEmptyBoardSeries() {
 	};
 }
 
+/* Two fetches can land close together - the 60 s interval and a manual panel
+   refresh - and both record. Half a minute is well under that interval and
+   well over the jitter, so it drops the duplicate without ever dropping a
+   real sample. (The old guard compared 'HH:MM' strings, which did the same
+   job only because the points were minute-resolution strings to begin with.) */
+var RXD_CHIP_MIN_GAP_MS = 30000;
+
 function rxdRecordChipData(d) {
 	if (!d || !d.boards || !d.boards.length) return;
 
-	var now = new Date();
-	var ts = ('0'+now.getHours()).slice(-2) + ':' + ('0'+now.getMinutes()).slice(-2);
+	var ts = Date.now();
 	var h = RXD.chipHistory;
+	var last = h.timestamps[h.timestamps.length - 1];
 
-	if (h.timestamps.length > 0 && h.timestamps[h.timestamps.length-1] === ts) return;
+	// A pre-epoch bridge fills this with 'HH:MM' rendered in the miner's
+	// clock. Appending browser-clock points to that is precisely the bug this
+	// replaced, so leave the series alone and let the server own it - all the
+	// append would have added is the few minutes since the last 5-minute
+	// sample, and every page load re-fetches those anyway.
+	if (h.timestamps.length > 0 && typeof last !== 'number') return;
+	if (typeof last === 'number' && ts - last < RXD_CHIP_MIN_GAP_MS) return;
 
 	// A board bucket created after other boards already have history is
 	// back-filled with zeros so every board's arrays stay aligned with the
@@ -1370,7 +1442,7 @@ function rxdChipChart(container, title, yTitle, statKey, suffix) {
 		series.push({ name: 'Board' + bn + ' (max)', data: rxdChipSeries(b, statKey, 'Max'), color: colors.max });
 	});
 
-	return rxdMakeChart(container, title, yTitle, series, null, suffix, h.timestamps);
+	return rxdMakeChart(container, title, yTitle, series, null, suffix, rxdChipLabels(h));
 }
 
 function rxdUpdateChipCharts() {
@@ -1403,7 +1475,7 @@ function rxdUpdateChipCharts() {
 	defs.forEach(function(d) {
 		var key = d[0], el = d[1], statKey = d[4];
 		if (RXD.charts[key] && RXD.charts[key].series.length === expectedSeries) {
-			RXD.charts[key].xAxis[0].setCategories(h.timestamps, false);
+			RXD.charts[key].xAxis[0].setCategories(rxdChipLabels(h), false);
 			var si = 0;
 			boardNums.forEach(function(bn) {
 				var b = h.boards[bn];

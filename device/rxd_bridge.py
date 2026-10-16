@@ -618,9 +618,21 @@ def chip_sampler():
 
 
 def chip_history(hours, points):
-    """Replay CHIP_LOG into the shape the dashboard's chip charts already use."""
+    """Replay CHIP_LOG into the shape the dashboard's chip charts already use.
+
+    Timestamps are epoch MILLISECONDS, as /history already returns. They used
+    to be 'HH:MM' strings rendered here, with the miner's clock, and the
+    browser then drew them on an axis beside /history labels rendered with its
+    own - a constant offset of the viewer's UTC offset (four hours, where this
+    was found) between the top row of charts and the bottom one. Worse, an
+    HH:MM carries no date, so two points a day apart sort as neighbours and
+    nothing downstream can tell that a series runs backwards.
+
+    Formatting is the browser's job. The wire carries an instant.
+    """
     cutoff = time.time() - hours * 3600
     stamps = []
+    index_of = {}
     boards = {}
     seen = set()
 
@@ -641,15 +653,19 @@ def chip_history(hours, points):
             if when < cutoff:
                 continue
 
-            label = time.strftime('%H:%M', time.localtime(when))
             key = bits[1]
             if (when, key) in seen:
                 continue
             seen.add((when, key))
 
-            if label not in stamps:
-                stamps.append(label)
-            index = len(stamps) - 1
+            # Keyed on the sample time, so the boards written for one sample
+            # share an index. The old 'label not in stamps' did that too, but
+            # by scanning the whole list each line, and it silently merged two
+            # samples that landed in the same minute.
+            if when not in index_of:
+                index_of[when] = len(stamps)
+                stamps.append(when * 1000)
+            index = index_of[when]
 
             series = boards.setdefault(key, {
                 'tempMin': [], 'tempAvg': [], 'tempMax': [],
