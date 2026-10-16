@@ -1,0 +1,22 @@
+# Everything in device/ is uploaded to the miner byte for byte by
+# install_rxd.py and then run by busybox sh or Python 2.7. A CRLF line ending
+# that survived a clone on Windows would reach the miner intact and break the
+# script there - busybox treats the \r as part of the command. Force LF so a
+# clone on any platform produces files the miner can actually run.
+device/** text eol=lf
+*.sh text eol=lf
+*.py text eol=lf
+
+# The web assets are served to a browser, which does not care, but keeping them
+# LF means the firmware package builds byte-identically on every machine.
+*.css text eol=lf
+*.js text eol=lf
+*.md text eol=lf
+
+# Never let Git's text handling touch a firmware image or a certificate: a
+# single altered byte makes an encrypted .bgz undecryptable.
+*.bgz binary
+*.tar binary
+*.crt binary
+*.key binary
+*.png binary

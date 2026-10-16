@@ -1,0 +1,17 @@
+# Firmware packages and anything unpacked from one. These are IceRiver's and
+# are not ours to redistribute.
+*.bgz
+*.tar
+*.tar.gz
+ICM168_*/
+certs/
+*.crt
+*.key
+*.pem
+
+__pycache__/
+*.pyc
+.venv/
+venv/
+.DS_Store
+*.swp

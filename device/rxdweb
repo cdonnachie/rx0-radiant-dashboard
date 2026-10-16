@@ -1,0 +1,86 @@
+#!/bin/sh
+# Apply the Radiant dashboard to the web root the miner just unpacked.
+#
+# /var/volatile/tmp/bg is tmpfs, rebuilt from /var/update/*_bg.bgz on every
+# boot, so a patch applied there does not survive a restart. This reapplies
+# it, which is what lets the whole dashboard install WITHOUT repacking the
+# firmware package - and repacking is the one step that needs IceRiver's
+# container passphrase.
+#
+# It also means the stock package is never modified. Nothing to back up,
+# nothing to restore, and a firmware update cannot leave a half-patched tree:
+# the new package unpacks clean and this patches it again.
+#
+# ORDERING. /etc/rc5.d is run in sorted order and S99boot.sh is what unpacks
+# the package, so this has to sort after it - S99rxdweb does, because "boot.sh"
+# sorts before "rxdweb". That is necessary but not sufficient: boot.sh returns
+# before the unpack has finished, so waiting for the tree to actually appear
+# is the real synchronisation, and the sort order only avoids a guaranteed
+# miss.
+#
+# Static files are served from disk per request, so appweb needs no restart
+# for these to take effect. appweb.conf is the exception - it is read once at
+# startup - which is why HTTPS is left to the offline package build.
+
+NAME=rxdweb
+PATCHER=/var/order/rxd_webpatch.py
+ASSETS=/var/order/web
+ROOT=/var/volatile/tmp/bg
+LOG=/var/log/rxdweb.log
+
+# How long to wait for boot.sh to finish unpacking. Generous: on a cold boot
+# with the miner starting at the same time this has been seen to take tens of
+# seconds, and giving up early means an unthemed UI until the next reboot.
+WAIT=180
+
+log() {
+    echo "$(date '+%Y-%m-%d %H:%M:%S')  $*" >> "$LOG"
+}
+
+start() {
+    if [ ! -f "$PATCHER" ]; then
+        log "ERROR: $PATCHER missing, nothing to do"
+        return 1
+    fi
+
+    waited=0
+    while [ ! -f "$ROOT/web/js/base.js" ]; do
+        if [ "$waited" -ge "$WAIT" ]; then
+            log "ERROR: $ROOT/web/js/base.js never appeared after ${WAIT}s"
+            return 1
+        fi
+        sleep 2
+        waited=$((waited + 2))
+    done
+    [ "$waited" -gt 0 ] && log "waited ${waited}s for the web root"
+
+    # The patcher is idempotent, so running it over an already-patched tree is
+    # a no-op rather than a double-append.
+    if python "$PATCHER" "$ROOT" "$ASSETS" >> "$LOG" 2>&1; then
+        log "dashboard applied"
+    else
+        log "ERROR: patcher failed - the stock UI is still intact"
+        return 1
+    fi
+    return 0
+}
+
+case "$1" in
+    start)
+        # Backgrounded: this waits on another boot script, and rc runs these
+        # in series. Blocking here would hold up everything after it.
+        start &
+        ;;
+    stop)
+        # Nothing to stop. The next boot unpacks a clean tree from the stock
+        # package, so "uninstall" is just removing this script.
+        ;;
+    restart)
+        start
+        ;;
+    *)
+        echo "usage: $NAME {start|stop|restart}"
+        exit 1
+        ;;
+esac
+exit 0

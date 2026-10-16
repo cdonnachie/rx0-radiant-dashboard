@@ -1,0 +1,79 @@
+#!/bin/sh
+### BEGIN INIT INFO
+# Provides:          rxdfan
+# Required-Start:    $network
+# Default-Start:     5
+# Short-Description: Re-apply the fixed fan ratio after a restart
+### END INIT INFO
+#
+# Its own init script rather than an edit to the vendor's bgserver.sh, for the
+# same reason as rxdbridge: nothing here can stop the miner from booting.
+#
+# start returns immediately. The worker waits for the miner's command port,
+# which does not open for a couple of minutes after boot, and blocking init
+# for that long would delay everything behind it.
+#
+# The worker is resident: the miner reclaims the fan a few minutes after boot,
+# so holding a fixed ratio means staying around to put it back.
+
+# This busybox has no pgrep or pkill, so the pid is tracked in a file. It goes
+# in /var/run, which is tmpfs: a stale pid can never survive a reboot, and
+# running() checks /proc anyway in case the worker died without cleaning up.
+
+DAEMON=/var/order/rxd_fanset.sh
+LOG=/var/log/rxdfan.log
+PIDFILE=/var/run/rxdfan.pid
+
+running() {
+  [ -f "$PIDFILE" ] || return 1
+  read pid < "$PIDFILE" 2>/dev/null || return 1
+  [ -n "$pid" ] && [ -d "/proc/$pid" ]
+}
+
+case "$1" in
+  start)
+    [ -x "$DAEMON" ] || chmod 755 "$DAEMON" 2>/dev/null
+    if running; then
+      echo "rxdfan already running (pid $pid)"
+    else
+      nohup "$DAEMON" >> "$LOG" 2>&1 &
+      echo $! > "$PIDFILE"
+      echo "rxdfan started (pid $(cat $PIDFILE))"
+    fi
+    ;;
+  stop)
+    # Stopping only ends the watch; whatever ratio is currently set stays
+    # until the miner next decides to change it.
+    if running; then
+      kill "$pid" 2>/dev/null
+      rm -f "$PIDFILE"
+      echo "rxdfan stopped"
+    else
+      rm -f "$PIDFILE"
+      echo "rxdfan: not running"
+    fi
+    ;;
+  restart)
+    # Now that the worker is resident, restart has to stop the old one first
+    # or two of them end up fighting over the same setting.
+    "$0" stop
+    "$0" start
+    ;;
+  status)
+    if running; then
+      echo "rxdfan: running (pid $pid)"
+    else
+      echo "rxdfan: not running"
+    fi
+    if [ -f "$LOG" ]; then
+      tail -3 "$LOG"
+    else
+      echo "never run"
+    fi
+    ;;
+  *)
+    echo "Usage: $0 {start|stop|restart|status}"
+    exit 1
+    ;;
+esac
+exit 0

@@ -1,0 +1,51 @@
+#!/bin/sh
+### BEGIN INIT INFO
+# Provides:          rxdbridge
+# Required-Start:    $network
+# Default-Start:     5
+# Short-Description: Radiant chip telemetry HTTP bridge
+### END INIT INFO
+#
+# Own init script rather than an edit to the vendor's bgserver.sh, so a
+# firmware update or a mistake here cannot stop the miner from booting.
+
+DAEMON=/var/order/rxd_bridge.py
+PIDFILE=/var/run/rxdbridge.pid
+LOG=/var/log/rxdbridge.log
+
+case "$1" in
+  start)
+    if [ -f "$PIDFILE" ] && kill -0 "$(cat $PIDFILE)" 2>/dev/null; then
+      echo "rxdbridge already running"
+      exit 0
+    fi
+    [ -x "$DAEMON" ] || chmod 755 "$DAEMON" 2>/dev/null
+    nohup python "$DAEMON" >> "$LOG" 2>&1 &
+    echo $! > "$PIDFILE"
+    echo "rxdbridge started"
+    ;;
+  stop)
+    if [ -f "$PIDFILE" ]; then
+      kill "$(cat $PIDFILE)" 2>/dev/null
+      rm -f "$PIDFILE"
+    fi
+    echo "rxdbridge stopped"
+    ;;
+  restart)
+    "$0" stop
+    sleep 1
+    "$0" start
+    ;;
+  status)
+    if [ -f "$PIDFILE" ] && kill -0 "$(cat $PIDFILE)" 2>/dev/null; then
+      echo "running (pid $(cat $PIDFILE))"
+    else
+      echo "not running"
+    fi
+    ;;
+  *)
+    echo "Usage: $0 {start|stop|restart|status}"
+    exit 1
+    ;;
+esac
+exit 0

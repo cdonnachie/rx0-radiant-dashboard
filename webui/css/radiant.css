@@ -1,0 +1,1240 @@
+/* Radiant (RXD) Theme for IceRiver RX0
+   Palette and type per radiantblockchain.org/rxd-brand-guide.html */
+
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+
+:root {
+	/* Official brand colors */
+	--rxd-black: #000000;
+	--rxd-white: #FFFFFF;
+	--rxd-dark-grey: #25252C;
+	--rxd-light-grey: #EDEDED;
+	--rxd-teal: #00F2F2;
+	--rxd-soft-blue: #7FE0FF;
+	--rxd-sky-blue: #00A8DE;
+	--rxd-blue-1: #4495F2;
+	--rxd-blue-3: #356FDB;
+	--rxd-blue-5: #1F4495;
+	--rxd-light-green: #007A74;
+	--rxd-dark-green: #004946;
+
+	/* Derived surface tokens */
+	--bg-primary: #000000;
+	--bg-secondary: #16161A;
+	--bg-card: #1C1C22;
+	--bg-card-alt: #25252C;
+	--border: #35353E;
+	--text-primary: #EDEDED;
+	--text-secondary: #9A9AA5;
+	--accent: #00F2F2;
+	--accent-bright: #7FE0FF;
+	--accent-dim: #00A8DE;
+	--ok: #00F2F2;
+	--warn: #E0A030;
+	--bad: #FF5C5C;
+}
+
+body, .main {
+	background: var(--bg-primary) !important;
+	color: var(--text-primary) !important;
+	font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif !important;
+}
+
+/* ---------- Sidebar ---------- */
+.left {
+	background: var(--bg-secondary) !important;
+	border-right: 1px solid var(--border) !important;
+}
+
+.left ul li.menucss span {
+	color: var(--text-secondary) !important;
+	font-size: 13px !important;
+	font-weight: 500 !important;
+}
+
+.left ul li.menucss:hover span { color: var(--accent-bright) !important; }
+.left ul li.menucssStatus span { color: var(--accent) !important; }
+
+/* Every item carries the indicator geometry so selecting one only changes
+   colour - without this the 3px border would shift the label sideways.
+   No transition on border-color: base.js re-toggles menucssStatus on every
+   refresh, which restarts the transition and leaves the border stuck at
+   currentColor instead of the accent. */
+/* Stock gives the row a 20px box and lets the 16px label sit 6px down inside
+   it, so the label overhangs the bottom edge and the selected item's highlight
+   never lines up with its own text. Centring it in a taller row fixes both. */
+.left ul li.menucss {
+	display: flex !important;
+	align-items: center !important;
+	min-height: 30px !important;
+	border-left: 3px solid transparent !important;
+	padding-left: 12px !important;
+	border-radius: 0 4px 4px 0;
+}
+
+.left ul li.menucssStatus {
+	border-left-color: var(--accent) !important;
+	background: rgba(0, 242, 242, 0.07) !important;
+}
+
+/* Radiant lockup */
+.radiant-brand {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+}
+
+.radiant-brand .rxd-mark {
+	color: var(--rxd-teal);
+	flex: 0 0 auto;
+	width: 30px;
+	height: 28px;
+	filter: drop-shadow(0 0 10px rgba(0, 242, 242, 0.3));
+}
+
+.radiant-brand .rxd-symbol {
+	width: 100%;
+	height: 100%;
+	display: block;
+}
+
+.radiant-brand .rxd-text {
+	display: flex;
+	flex-direction: column;
+	gap: 3px;
+	min-width: 0;
+}
+
+.radiant-brand .rxd-word {
+	color: var(--rxd-white);
+	width: 92px;
+	height: 16px;
+}
+
+.radiant-brand .rxd-wordmark {
+	width: 100%;
+	height: 100%;
+	display: block;
+}
+
+.radiant-brand .rxd-sub {
+	font-size: 9px;
+	font-weight: 500;
+	color: var(--text-secondary);
+	letter-spacing: 2.2px;
+}
+
+/* The lockup and menu are sized for the narrow sidebar the phone layout
+   collapses to; on a desktop there is room to spare, so both grow. 821px is
+   where the mobile breakpoint below stops applying. The sidebar is 225px wide
+   with 14px of padding each side, which puts the ceiling for the lockup at
+   ~197px - the sizes below come to 178px. */
+@media (min-width: 821px) {
+	/* The lockup stays side by side; the room for it comes from the stock ul's
+	   40px left pad instead. Trimming that to 24px widens every row in the
+	   sidebar equally, so the symbol and wordmark can both grow without the
+	   logo losing its alignment with the menu below it. 225px sidebar - 24px
+	   pad - 14px li padding either side leaves 152px; the lockup is 152px. */
+	.left ul { padding-left: 24px !important; }
+
+	.radiant-brand { gap: 10px; }
+
+	.radiant-brand .rxd-mark {
+		width: 40px;
+		height: 38px;
+	}
+
+	.radiant-brand .rxd-word {
+		width: 102px;
+		height: 18px;
+	}
+
+	.radiant-brand .rxd-sub {
+		font-size: 10px;
+		letter-spacing: 2.3px;
+	}
+
+	.left ul li.menucss {
+		min-height: 36px !important;
+	}
+
+	.left ul li.menucss span {
+		font-size: 15px !important;
+		line-height: 22px !important;
+	}
+}
+
+/* ---------- Top bar ---------- */
+.right .content1 {
+	background: var(--bg-secondary) !important;
+	border-bottom: 1px solid var(--border) !important;
+	color: var(--text-secondary) !important;
+}
+
+.right .content1 .algocss1,
+.right .content1 .algocss3 { color: var(--text-secondary) !important; }
+.right .content1 .logoutcss { color: var(--accent) !important; }
+
+.right .content1 select {
+	background: var(--bg-card) !important;
+	color: var(--text-primary) !important;
+	border: 1px solid var(--border) !important;
+	border-radius: 4px !important;
+}
+
+.right, .right .srcollcss { background: var(--bg-primary) !important; }
+
+/* ---------- Status panels ---------- */
+.right .content2 {
+	background: var(--bg-secondary) !important;
+	border: 1px solid var(--border) !important;
+	border-radius: 8px !important;
+}
+
+.right .content2 .panlcss {
+	background: var(--bg-secondary) !important;
+	border-right: 1px solid var(--border) !important;
+}
+
+.right .content2 .panlcss p,
+.right .content2 .panlcss span,
+.right .content2 .panlcss div span:first-child { color: var(--text-secondary) !important; }
+
+/* Status badges carry their own background, so they need a specificity high
+   enough to beat the generic .panlcss span rule above. */
+.right .content2 .panlcss .content2radiusGreencss,
+.right .content2 .panlcss .content2radiusRedcss,
+.right .content2 .panlcss .content2radiuscss {
+	color: var(--rxd-white) !important;
+	font-weight: 600 !important;
+}
+
+.right .content2 .panlcss .nowspeedcss,
+.right .content2 .panlcss .svgspeedcss {
+	color: var(--accent) !important;
+	font-size: 28px !important;
+	font-weight: 700 !important;
+}
+
+.right .content2 .panlcss .nowspeedunitcss,
+.right .content2 .panlcss .svgspeedunitcss { color: var(--text-secondary) !important; }
+
+.right .content2 .panlcss .rejectcss {
+	color: var(--text-primary) !important;
+	font-size: 28px !important;
+	font-weight: 600 !important;
+}
+
+.right .content2 .panlcss .runtimecss {
+	color: var(--text-primary) !important;
+	font-size: 18px !important;
+	font-weight: 600 !important;
+}
+
+.right .content2 .panlcss .runtime2css {
+	color: var(--text-secondary) !important;
+	font-size: 12px !important;
+}
+
+.content2radiusGreencss {
+	background: var(--rxd-light-green) !important;
+	color: var(--rxd-white) !important;
+	border-radius: 3px !important;
+}
+
+.content2radiusRedcss {
+	background: var(--bad) !important;
+	color: var(--rxd-white) !important;
+	border-radius: 3px !important;
+}
+
+/* Post-restart, while the miner's 5-minute average is still filling. Neither
+   green nor red: the state is genuinely unknown yet, and the red the stock UI
+   shows here trains you to ignore red. */
+.right .content2 .panlcss .rxd-warmup-pill {
+	background: rgba(0, 242, 242, 0.12) !important;
+	color: var(--rxd-teal) !important;
+	border: 1px solid rgba(0, 242, 242, 0.35) !important;
+	border-radius: 3px !important;
+	font-weight: 600 !important;
+}
+
+.right .content2 .panlcss .rxd-warmup-note {
+	color: var(--text-secondary) !important;
+	font-size: 12px !important;
+	line-height: 1.5 !important;
+	margin: 6px 0 0 !important;
+}
+
+/* ---------- Charts ---------- */
+.right .content3 {
+	background: var(--bg-card) !important;
+	border: 1px solid var(--border) !important;
+	border-radius: 8px !important;
+}
+
+.right .content3 .panlcss2 { background: var(--bg-card) !important; }
+
+/* Matches content4's width + inset so the charts share the panels' edges */
+.radiant-charts {
+	display: grid;
+	grid-template-columns: 1fr 1fr;
+	gap: 10px;
+	width: 97.6%;
+	margin: 10px 20px 0 20px;
+}
+
+/* Chip telemetry row carries three charts rather than two */
+#rxd-chip-row { grid-template-columns: repeat(3, 1fr); }
+
+@media (max-width: 1500px) {
+	#rxd-chip-row { grid-template-columns: repeat(2, 1fr); }
+}
+
+@media (max-width: 1100px) {
+	.radiant-charts,
+	#rxd-chip-row { grid-template-columns: 1fr; }
+}
+
+/* Hashrate spans the row on its own - see rxdCreateChartContainers */
+.radiant-charts.rxd-charts-single { grid-template-columns: 1fr; }
+
+.radiant-chart-box {
+	background: var(--bg-card) !important;
+	border: 1px solid var(--border) !important;
+	border-radius: 8px !important;
+	padding: 0;
+	min-height: 280px;
+}
+
+.highcharts-background { fill: transparent !important; }
+.highcharts-title { fill: var(--text-primary) !important; }
+.highcharts-subtitle,
+.highcharts-axis-title,
+.highcharts-axis-labels text,
+.highcharts-legend-item text { fill: var(--text-secondary) !important; }
+.highcharts-grid-line { stroke: #2A2A33 !important; }
+.highcharts-tick { stroke: var(--border) !important; }
+
+/* ---------- Tables ---------- */
+.right .content4,
+.right .content5,
+.right .content6 {
+	background: var(--bg-secondary) !important;
+	border: 1px solid var(--border) !important;
+	border-radius: 8px !important;
+}
+
+.right .content4 p,
+.right .content5 p { color: var(--text-primary) !important; }
+
+.table { color: var(--text-primary) !important; }
+
+.table thead tr { background: var(--bg-card-alt) !important; }
+
+.table thead th {
+	color: var(--text-secondary) !important;
+	border-bottom: 1px solid var(--border) !important;
+	border-top: none !important;
+	font-weight: 600 !important;
+	font-size: 12px !important;
+	letter-spacing: 0.3px !important;
+}
+
+.table tbody tr { border-bottom: 1px solid var(--border) !important; }
+
+.table tbody td {
+	color: var(--text-primary) !important;
+	border-top: 1px solid var(--border) !important;
+}
+
+.table-hover tbody tr:hover { background: rgba(0, 242, 242, 0.04) !important; }
+
+.poolstatuscss.statusOncss { color: var(--accent) !important; }
+.poolstatuscss.statusOffcss { color: var(--bad) !important; }
+
+td { color: var(--text-primary) !important; }
+.textright { color: var(--text-secondary) !important; }
+
+/* ---------- Bottom bar ---------- */
+.right .content7 {
+	background: var(--bg-secondary) !important;
+	border-top: 1px solid var(--border) !important;
+	color: var(--text-secondary) !important;
+}
+
+.right .content7 span { color: var(--text-secondary) !important; }
+
+.right .content7 .restorecss {
+	background: var(--bad) !important;
+	border: none !important;
+	color: var(--rxd-white) !important;
+	border-radius: 5px !important;
+	font-weight: 500 !important;
+}
+
+.right .content7 .rebootcss {
+	background: linear-gradient(135deg, var(--accent), var(--accent-dim)) !important;
+	border: none !important;
+	color: var(--rxd-black) !important;
+	border-radius: 5px !important;
+	font-weight: 600 !important;
+}
+
+/* ---------- Loading overlay ---------- */
+.bardiv {
+	background-color: rgba(0, 0, 0, 0.72) !important;
+	backdrop-filter: blur(1px);
+}
+
+.bardivOpacity { opacity: 0.85 !important; }
+
+.bardiv .bar {
+	background-color: rgba(0, 242, 242, 0.12) !important;
+	height: 6px !important;
+}
+
+.bardiv .bar .bg {
+	background-image: linear-gradient(135deg, var(--accent) 25%, var(--accent-dim) 0, var(--accent-dim) 50%, var(--accent) 0, var(--accent) 75%, var(--accent-dim) 0) !important;
+	animation: rxdBarSlide 1s linear infinite;
+}
+
+@keyframes rxdBarSlide {
+	from { background-position: 0 0; }
+	to   { background-position: 32px 0; }
+}
+
+/* ---------- Forms and settings pages ---------- */
+.machine_main, .ip_main, .system_main, .log_main, .fir_main {
+	background: var(--bg-secondary) !important;
+	border: 1px solid var(--border) !important;
+	border-radius: 8px !important;
+	color: var(--text-primary) !important;
+}
+
+/* Inner panels on the settings pages */
+.machine_main .machine_top,
+.machine_main .machine_bottom {
+	border: 1px solid var(--border) !important;
+	background: var(--bg-card) !important;
+}
+
+.machine_main table, .ip_main table, .system_main table,
+.fir_main table, .log_main table { color: var(--text-primary) !important; }
+
+.machine_main td, .ip_main td, .system_main td,
+.fir_main td, .log_main td { border-color: var(--border) !important; }
+
+.log_main #tab a {
+	background: var(--bg-card) !important;
+	color: var(--text-secondary) !important;
+	border-color: var(--border) !important;
+}
+
+.log_main #tab a.active,
+.log_main #tab a:hover { color: var(--accent) !important; }
+
+.log_main textarea, .log_main pre, .log_main .logcontent {
+	background: var(--bg-card) !important;
+	color: var(--text-primary) !important;
+	border: 1px solid var(--border) !important;
+}
+
+.machine_main .title, .ip_main .title, .system_main .title,
+.fir_main .title, .log_main .title {
+	color: var(--text-primary) !important;
+	font-weight: 600 !important;
+}
+
+.machine_main input, .ip_main input, .system_main input,
+.machine_main select, .ip_main select, .system_main select,
+.fir_main input[type="text"] {
+	background: var(--bg-card) !important;
+	color: var(--text-primary) !important;
+	border: 1px solid var(--border) !important;
+	border-radius: 5px !important;
+}
+
+.machine_main input:focus, .ip_main input:focus, .system_main input:focus,
+.fir_main input:focus {
+	border-color: var(--accent) !important;
+	box-shadow: 0 0 0 3px rgba(0, 242, 242, 0.12) !important;
+	outline: none !important;
+}
+
+.machine_main .foot button, .ip_main .foot button,
+.system_main .foot button, .fir_main .foot button {
+	background: linear-gradient(135deg, var(--accent), var(--accent-dim)) !important;
+	border: none !important;
+	color: var(--rxd-black) !important;
+	border-radius: 5px !important;
+	font-weight: 600 !important;
+	padding: 8px 24px !important;
+}
+
+/* ---------- Modals ---------- */
+.modal-content {
+	background: var(--bg-card) !important;
+	border: 1px solid var(--border) !important;
+	color: var(--text-primary) !important;
+	border-radius: 10px !important;
+}
+
+.modal-header, .modal-footer { border-color: var(--border) !important; }
+.modal-backdrop { background-color: var(--rxd-black) !important; }
+
+.modal-footer .btn-primary {
+	background: linear-gradient(135deg, var(--accent), var(--accent-dim)) !important;
+	border: none !important;
+	color: var(--rxd-black) !important;
+	font-weight: 600 !important;
+}
+
+.modal-footer .btn-default {
+	background: var(--bg-card-alt) !important;
+	border: 1px solid var(--border) !important;
+	color: var(--text-primary) !important;
+}
+
+/* bootbox.dialog() - a title and a paragraph body, unlike the one-line
+   bootbox.alert() the stock pages use. */
+.modal-title {
+	color: var(--text-primary) !important;
+	font-weight: 600 !important;
+}
+
+.bootbox .modal-body p { margin: 0 0 10px; line-height: 1.5; }
+.bootbox .modal-body p:last-child { margin-bottom: 0; }
+.bootbox .modal-body strong { color: var(--accent); }
+.bootbox .close {
+	color: var(--text-secondary) !important;
+	opacity: 0.8 !important;
+	text-shadow: none !important;
+}
+
+/* ---------- Scrollbar ---------- */
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: var(--bg-secondary); }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: var(--text-secondary); }
+
+/* =====================================================================
+   Responsive
+   The stock layout is desktop-only: .main carries min-width:1873px and
+   .srcollcss a fixed 800px height with overflow-x:hidden (which silently
+   clips the wide tables). Both are released below, and the sidebar turns
+   into a horizontal strip once there is no room for a column.
+   ===================================================================== */
+
+/* Tablet / small laptop - keep the sidebar, relax the fixed minimum */
+@media (max-width: 1200px) {
+	.main {
+		min-width: 0 !important;
+		width: 100% !important;
+	}
+
+	.left { width: 180px !important; flex: 0 0 180px !important; }
+	.right { width: auto !important; flex: 1 1 auto !important; min-width: 0 !important; }
+
+	/* Five 24% panels cannot fit - wrap to two per row */
+	.right .content2 { flex-wrap: wrap !important; }
+	.right .content2 .panlcss {
+		width: calc(50% - 20px) !important;
+		border-right: none !important;
+	}
+
+	.radiant-charts { grid-template-columns: 1fr !important; }
+
+	/* Tables are 8 columns wide; scroll them inside their card rather than
+	   letting .srcollcss clip them. These cards are display:inline-block, so
+	   they must be block + max-width here - otherwise shrink-to-fit sizing
+	   grows the card to the table's width and nothing ever overflows. */
+	.right .content4,
+	.right .content5,
+	.right .content6 {
+		display: block !important;
+		max-width: 100% !important;
+		box-sizing: border-box !important;
+		overflow-x: auto !important;
+		-webkit-overflow-scrolling: touch;
+	}
+
+	.right .content4 table,
+	.right .content5 table,
+	.right .content6 table { min-width: 720px; }
+
+	/* Let columns keep their natural width and scroll, rather than breaking
+	   long values (wallet addresses) mid-word into unreadable stacks */
+	.right .content4 table th, .right .content4 table td,
+	.right .content5 table th, .right .content5 table td,
+	.right .content6 table th, .right .content6 table td {
+		white-space: nowrap !important;
+	}
+}
+
+/* Phone / narrow tablet - stack the whole shell */
+@media (max-width: 820px) {
+	html, body { height: auto !important; overflow-x: hidden; }
+
+	.main {
+		flex-direction: column !important;
+		height: auto !important;
+		min-height: 100% !important;
+	}
+
+	/* Sidebar becomes a header bar with a hamburger above the content */
+	.left {
+		width: 100% !important;
+		flex: 0 0 auto !important;
+		height: auto !important;
+		padding: 0 !important;
+		position: relative !important;
+		border-right: none !important;
+		border-bottom: 1px solid var(--border) !important;
+	}
+
+	.rxd-nav-toggle {
+		display: flex !important;
+		flex-direction: column;
+		justify-content: center;
+		gap: 5px;
+		position: absolute;
+		top: 16px;
+		right: 12px;
+		width: 44px;
+		height: 40px;
+		padding: 0 10px;
+		background: var(--bg-card);
+		border: 1px solid var(--border);
+		border-radius: 6px;
+		cursor: pointer;
+		z-index: 5;
+	}
+
+	.rxd-nav-toggle span {
+		display: block;
+		width: 100%;
+		height: 2px;
+		background: var(--accent);
+		border-radius: 2px;
+	}
+
+	.left ul {
+		display: flex !important;
+		flex-wrap: wrap;
+		align-items: center;
+		margin: 0 !important;
+		padding: 0 10px 8px 10px !important;
+		font-size: 14px !important;
+	}
+
+	/* Brand sits on its own row above the menu items */
+	.left ul li.rxd-branded {
+		flex: 0 0 100%;
+		padding: 12px 4px 8px !important;
+	}
+
+	/* Collapsed behind the hamburger until opened */
+	.left ul li.menucss { display: none !important; }
+
+	.left.rxd-nav-open ul li.menucss {
+		display: block !important;
+		flex: 0 0 100%;
+		height: auto !important;
+		margin: 2px 0 !important;
+		padding: 11px 12px !important;
+		border-left: 3px solid transparent !important;
+		border-radius: 0 4px 4px 0 !important;
+	}
+
+	.left.rxd-nav-open ul li.menucssStatus {
+		border-left-color: var(--accent) !important;
+		background: rgba(0, 242, 242, 0.07) !important;
+	}
+
+	.left ul li.menucss span { font-size: 15px !important; }
+
+	.right { width: 100% !important; min-height: 0 !important; }
+
+	/* Release the fixed scroll pane so the page itself scrolls */
+	.right .srcollcss {
+		height: auto !important;
+		overflow-y: visible !important;
+		overflow-x: hidden !important;
+	}
+
+	/* Top bar and footer wrap instead of overflowing */
+	.right .content1,
+	.right .content7 {
+		height: auto !important;
+		flex-wrap: wrap !important;
+		gap: 6px;
+		padding: 10px !important;
+		font-size: 12px !important;
+	}
+
+	/* One panel per row, full width */
+	.right .content2 .panlcss {
+		width: 100% !important;
+		margin: 6px 0 !important;
+		border-bottom: 1px solid var(--border) !important;
+	}
+
+	.right .content2 .panlcss:last-child { border-bottom: none !important; }
+
+	.right .content2,
+	.right .content3,
+	.radiant-charts,
+	.right .content4,
+	.right .content5,
+	.right .content6 {
+		width: auto !important;
+		margin: 10px !important;
+	}
+
+	/* The loading overlay is pinned to the desktop content width */
+	.bardiv { width: 100% !important; }
+
+	/* Settings pages use a fixed 97.6% + 20px margins */
+	.machine_main, .ip_main, .system_main,
+	.fir_main, .log_main {
+		width: auto !important;
+		margin: 12px !important;
+		padding: 14px !important;
+	}
+
+	/* Every settings form is laid out as a table: a right-aligned label cell
+	   and a cell holding a fixed-width input. The input's own width sets the
+	   table's minimum, so at phone width the table pushes past its container
+	   and the inputs run off the right edge instead of shrinking.
+
+	   table-layout: fixed is what breaks that link - the columns then take the
+	   widths set here rather than their contents' - and the inputs are given a
+	   border-box 100% so they fill their cell exactly. Rows stay rows, which
+	   keeps the multi-column tables on Mining Settings and the log pages
+	   readable rather than stacking them into a column of fragments. */
+	.machine_main .content table, .ip_main .content table,
+	.system_main .content table, .fir_main .content table {
+		width: 100% !important;
+		table-layout: fixed !important;
+	}
+
+	.machine_main .content td.textright, .ip_main .content td.textright,
+	.system_main .content td.textright, .fir_main .content td.textright {
+		width: 38% !important;
+		white-space: normal !important;
+		word-break: break-word;
+		padding-right: 10px !important;
+	}
+
+	.machine_main .content input, .ip_main .content input,
+	.system_main .content input, .fir_main .content input,
+	.machine_main .content select, .ip_main .content select,
+	.system_main .content select, .fir_main .content select {
+		width: 100% !important;
+		max-width: 100% !important;
+		box-sizing: border-box !important;
+	}
+
+	/* Checkboxes and radios are not text fields and must not be stretched. */
+	.machine_main .content input[type="checkbox"],
+	.machine_main .content input[type="radio"],
+	.ip_main .content input[type="checkbox"],
+	.system_main .content input[type="checkbox"] {
+		width: auto !important;
+	}
+
+	/* Pool configuration is a four-column table of 300px inputs - about 990px
+	   wide inside a 320px box that clips it, which puts the password column
+	   out of reach entirely. It is a form, and stacking the cells would
+	   scatter each pool's fields away from their labels, so instead let it
+	   scroll within its own box and trim the inputs so there is less of it to
+	   scroll through. */
+	.machine_main .machine_top .bottom,
+	.machine_main .machine_bottom .bottom {
+		overflow-x: auto !important;
+		-webkit-overflow-scrolling: touch;
+	}
+
+	.machine_main .machine_top input[type="text"],
+	.machine_main .machine_top input[type="password"] {
+		width: 190px !important;
+		min-width: 150px;
+	}
+
+	/* The version footer and its two buttons are the last thing on the page,
+	   and on iOS the floating browser toolbar sits on top of them. Room at the
+	   bottom lets them scroll clear of it; env() adds the home-indicator inset
+	   on the phones that report one and resolves to 0 everywhere else. */
+	.right .srcollcss {
+		padding-bottom: calc(76px + env(safe-area-inset-bottom, 0px)) !important;
+	}
+
+	/* Pool config is a 3-column grid of wide inputs - scroll it inside its
+	   panel instead of letting it run off the edge */
+	.machine_main .machine_top,
+	.machine_main .machine_bottom {
+		overflow-x: auto !important;
+		-webkit-overflow-scrolling: touch;
+	}
+
+	/* Stacked form rows - the stock tables put label and field side by side */
+	.ip_main table, .system_main table,
+	.fir_main table { width: 100% !important; }
+
+	.machine_main input, .ip_main input, .system_main input,
+	.fir_main input[type="text"] {
+		max-width: 100% !important;
+	}
+
+	/* fir.css sets #filetext to a hard 550px via an ID selector, which also
+	   drags the surrounding table wider than the screen */
+	.fir_main .content #filetext {
+		width: 100% !important;
+		min-width: 0 !important;
+		box-sizing: border-box !important;
+	}
+
+	.fir_main .content table,
+	.fir_main .content table td { max-width: 100% !important; }
+
+	.fir_main .content table .textright { width: auto !important; }
+
+	.fir_main .content { overflow-x: hidden !important; }
+
+	/* Log tabs are three floated 120px cells (360px) inside an absolutely
+	   positioned ul in a fixed 40px header - the third wraps and escapes the
+	   header. Flex them so they divide the available width instead. */
+	.log_main #tab #tab-header { height: auto !important; }
+
+	.log_main #tab #tab-header ul {
+		position: static !important;
+		left: 0 !important;
+		display: flex !important;
+		width: 100% !important;
+	}
+
+	.log_main #tab #tab-header ul li {
+		float: none !important;
+		flex: 1 1 0 !important;
+		width: auto !important;
+		min-width: 0 !important;
+		padding: 0 2px !important;
+		font-size: 13px !important;
+		white-space: nowrap !important;
+	}
+
+	/* Download list items are a fixed 225px */
+	.log_main #tab #tab-content .dom ul li {
+		float: none !important;
+		width: auto !important;
+		max-width: 100% !important;
+		margin: 12px 0 !important;
+	}
+}
+
+/* Hidden on desktop; the mobile breakpoint above reveals it */
+.rxd-nav-toggle { display: none; }
+
+/* Narrow phones - the login card is a fixed 380px */
+@media (max-width: 420px) {
+	.login_main .login_div { width: auto !important; margin: 0 14px; }
+	.right .content2 .panlcss .nowspeedcss,
+	.right .content2 .panlcss .svgspeedcss,
+	.right .content2 .panlcss .rejectcss { font-size: 22px !important; }
+}
+
+/* ------------------------------------------------------------- Overclock page
+
+   Rendered by rxdOcMenu() into .right .srcollcss, the same container the stock
+   views load into, so it inherits the page chrome and only needs its own card. */
+.rxd-oc { padding: 18px; }
+
+.rxd-oc-card {
+	background: var(--bg-card);
+	border: 1px solid var(--border);
+	border-radius: 10px;
+	padding: 22px 24px;
+	max-width: 620px;
+}
+
+/* 620px suits a column of prose and one select. It does not suit the Swarm
+   table, which is ten columns of nowrap values and needs about 780px - at the
+   narrow width the table simply drew outside the card's right edge, because
+   nothing clipped or scrolled it above the 760px breakpoint. */
+.rxd-oc-card--wide { max-width: 1100px; }
+
+.rxd-oc-card h3 {
+	margin: 0 0 18px;
+	font-size: 18px;
+	font-weight: 600;
+	color: var(--text-primary);
+}
+
+.rxd-oc-now {
+	display: flex;
+	gap: 28px;
+	flex-wrap: wrap;
+	padding-bottom: 16px;
+	margin-bottom: 18px;
+	border-bottom: 1px solid var(--border);
+}
+
+.rxd-oc-label {
+	display: block;
+	font-size: 12px;
+	letter-spacing: .04em;
+	text-transform: uppercase;
+	color: var(--text-secondary);
+	margin-bottom: 4px;
+}
+
+.rxd-oc-value {
+	font-size: 24px;
+	font-weight: 600;
+	color: var(--accent);
+}
+
+.rxd-oc-form { display: grid; grid-template-columns: 120px 1fr; gap: 12px 14px; align-items: center; }
+.rxd-oc-form label { color: var(--text-secondary); font-size: 14px; }
+
+.rxd-oc-form select {
+	width: 100%;
+	box-sizing: border-box;
+	padding: 9px 11px;
+	background: var(--bg-card-alt);
+	border: 1px solid var(--border);
+	border-radius: 6px;
+	color: var(--text-primary);
+	font-size: 14px;
+}
+
+.rxd-oc-form select:focus {
+	outline: none;
+	border-color: var(--accent-dim);
+}
+
+.rxd-oc-apply {
+	grid-column: 1 / -1;
+	justify-self: start;
+	margin-top: 4px;
+	padding: 10px 20px;
+	background: var(--accent-dim);
+	border: none;
+	border-radius: 6px;
+	color: #06161C;
+	font-size: 14px;
+	font-weight: 600;
+	cursor: pointer;
+}
+.rxd-oc-apply:hover { background: var(--accent-bright); }
+
+.rxd-oc-warn,
+.rxd-oc-note {
+	margin: 18px 0 0;
+	font-size: 13px;
+	line-height: 1.55;
+	color: var(--text-secondary);
+}
+.rxd-oc-warn { color: #FFD479; }
+.rxd-oc-note strong { color: var(--text-primary); }
+
+.rxd-oc-pending {
+	margin: 0 0 16px;
+	padding: 10px 12px;
+	border-left: 3px solid #FFD479;
+	background: rgba(255, 212, 121, .08);
+	font-size: 13px;
+	color: var(--text-primary);
+}
+
+.rxd-oc-busy  { color: var(--text-secondary); font-size: 14px; }
+.rxd-oc-ok    { color: var(--accent); font-size: 14px; line-height: 1.55; margin-top: 16px; }
+.rxd-oc-error { color: #FF7A7A; font-size: 14px; line-height: 1.55; margin-top: 16px; }
+
+@media (max-width: 640px) {
+	.rxd-oc { padding: 12px; }
+	.rxd-oc-card { padding: 18px 16px; }
+	.rxd-oc-form { grid-template-columns: 1fr; gap: 8px; }
+	.rxd-oc-form label { margin-top: 6px; }
+}
+
+/* --- Fan page ------------------------------------------------------------ */
+
+.rxd-fan-form { margin-top: 4px; }
+
+.rxd-fan-mode {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	margin: 18px 0 6px;
+	color: var(--text-primary);
+	font-size: 15px;
+	cursor: pointer;
+}
+.rxd-fan-mode input { margin: 0; }
+
+/* The inactive group stays visible but clearly out of play, rather than
+   vanishing - the sliders are the explanation of what each mode does, and
+   hiding them makes the page look emptier than it is. */
+.rxd-fan-group {
+	padding: 4px 0 4px 26px;
+	transition: opacity .15s ease;
+}
+.rxd-fan-off { opacity: .35; pointer-events: none; }
+
+.rxd-fan-slider { margin: 12px 0; max-width: 520px; }
+.rxd-fan-slider label {
+	display: flex;
+	justify-content: space-between;
+	align-items: baseline;
+	color: var(--text-secondary);
+	font-size: 14px;
+	margin-bottom: 6px;
+}
+.rxd-fan-readout {
+	color: var(--accent);
+	font-size: 15px;
+	font-variant-numeric: tabular-nums;
+}
+.rxd-fan-slider input[type=range] {
+	width: 100%;
+	accent-color: var(--accent);
+	background: transparent;
+}
+
+/* --- Swarm page ---------------------------------------------------------- */
+
+.rxd-swarm {
+	width: 100%;
+	border-collapse: collapse;
+	margin-top: 6px;
+	font-size: 14px;
+}
+.rxd-swarm th {
+	text-align: left;
+	padding: 10px 12px 10px 0;
+	color: var(--text-secondary);
+	font-weight: 500;
+	font-size: 13px;
+	border-bottom: 1px solid var(--border);
+	white-space: nowrap;
+}
+.rxd-swarm td {
+	padding: 12px 12px 12px 0;
+	border-bottom: 1px solid var(--border);
+	color: var(--text-primary);
+	font-variant-numeric: tabular-nums;
+	white-space: nowrap;
+}
+.rxd-swarm tr:last-child td { border-bottom: 0; }
+
+.rxd-swarm-host { color: var(--text-secondary); font-size: 12px; margin-top: 2px; }
+.rxd-swarm-empty {
+	color: var(--text-secondary);
+	white-space: normal !important;
+	padding: 22px 0 !important;
+}
+
+.rxd-swarm-dot {
+	display: inline-block;
+	width: 8px; height: 8px;
+	border-radius: 50%;
+	margin-right: 8px;
+	vertical-align: middle;
+}
+.rxd-swarm-up { background: var(--accent); }
+.rxd-swarm-down { background: #FF7A7A; }
+
+/* A stock peer is reachable, just limited - so this is a quiet label, not a
+   warning colour. It is read through the stock web API, which reports no
+   usable chip count or clock, and those cells stay blank. */
+.rxd-swarm-tag {
+	display: inline-block;
+	margin-left: 8px;
+	padding: 1px 6px;
+	border: 1px solid var(--border);
+	border-radius: 10px;
+	color: var(--text-secondary);
+	font-size: 11px;
+	vertical-align: middle;
+	cursor: help;
+}
+
+.rxd-swarm-del, .rxd-swarm-add button {
+	background: transparent;
+	border: 1px solid var(--border);
+	border-radius: 6px;
+	color: var(--text-secondary);
+	padding: 6px 12px;
+	font-size: 13px;
+	cursor: pointer;
+}
+.rxd-swarm-del:hover, .rxd-swarm-add button:hover {
+	color: var(--text-primary);
+	border-color: var(--accent);
+}
+
+.rxd-swarm-add {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 10px;
+	margin-top: 18px;
+}
+.rxd-swarm-add input {
+	background: var(--bg-card-alt);
+	border: 1px solid var(--border);
+	border-radius: 6px;
+	color: var(--text-primary);
+	padding: 8px 10px;
+	font-size: 14px;
+}
+.rxd-swarm-add input:focus { border-color: var(--accent); outline: none; }
+
+/* The table scrolls sideways inside its own wrapper rather than squeezing ten
+   numeric columns into the card - or, as it used to, drawing straight through
+   the card's right edge on a desktop. The wrapper does this at every width, so
+   the card keeps its padding and only the table moves. */
+.rxd-swarm-wrap { overflow-x: auto; }
+
+@media (max-width: 760px) {
+	.rxd-swarm { min-width: 680px; }
+	.rxd-swarm-add input { flex: 1 1 140px; min-width: 0; }
+}
+
+/* The measured value beside each status pill. Muted and smaller than the pill
+   so the row still reads as a status first and a number second. */
+.rxd-health-value {
+	margin-left: 8px;
+	font-size: 13px;
+	color: var(--text-secondary);
+	white-space: nowrap;
+}
+
+/* The status column carries six visible rows now - the stock hashrate, fan and
+   temperature ones, plus Pool, Chip clock and Protection - and each also shows
+   its measured value. Stock sizes that column for a few short rows at 20px in a
+   fixed 135px box, so the last rows fell out of the card and every row wrapped
+   onto two lines once a value was appended beside the pill.
+
+   Scoped with :first-child because only the leftmost panel holds status rows;
+   the other four are the big single-figure tiles and must keep their sizing. */
+.right .content2 { height: auto !important; }
+
+.right .content2 .panlcss:first-child {
+	height: auto !important;
+	font-size: 16px !important;
+	justify-content: center;
+}
+
+/* One line per row: label on the left, pill and value on the right. The
+   :not(.hidden) matters - stock ships a hidden "Network Status" row, and a bare
+   display:flex here is specific enough to beat .hidden and un-hide it. */
+.right .content2 .panlcss:first-child > div:not(.hidden) {
+	display: flex;
+	align-items: baseline;
+	white-space: nowrap;
+	line-height: 1.65;
+}
+
+.right .content2 .panlcss:first-child > div > span:first-child { flex: 1 1 auto; }
+
+.right .content2 .panlcss:first-child .content2radiuscss {
+	margin-left: 10px !important;
+	font-size: 15px !important;
+}
+/* Manual refresh control in the header. Sits beside the stock "refresh time"
+   stamp: a button, the seconds remaining, and a bar that fills as the minute
+   runs down, so the page says both when it last updated and when it will
+   next. */
+.rxd-refresh {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	margin-left: 12px;
+	vertical-align: middle;
+}
+
+.rxd-refresh.is-off { display: none; }
+
+.rxd-refresh-btn {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 22px;
+	height: 22px;
+	padding: 0;
+	line-height: 0;
+	border: 1px solid var(--border);
+	border-radius: 4px;
+	background: var(--bg-card);
+	color: var(--accent);
+	cursor: pointer;
+}
+
+.rxd-refresh-btn:hover { border-color: var(--accent); }
+
+.rxd-refresh.is-busy .rxd-refresh-btn {
+	cursor: default;
+	opacity: 0.6;
+}
+
+.rxd-refresh.is-busy .rxd-refresh-btn svg {
+	animation: rxd-spin 0.9s linear infinite;
+}
+
+@keyframes rxd-spin { to { transform: rotate(360deg); } }
+
+@media (prefers-reduced-motion: reduce) {
+	.rxd-refresh.is-busy .rxd-refresh-btn svg { animation: none; }
+}
+
+.rxd-refresh-next {
+	font-size: 12px;
+	color: var(--text-secondary);
+	min-width: 30px;
+	font-variant-numeric: tabular-nums;
+}
+
+.rxd-refresh-bar {
+	display: inline-block;
+	width: 44px;
+	height: 3px;
+	border-radius: 2px;
+	background: var(--border);
+	overflow: hidden;
+}
+
+.rxd-refresh-bar > i {
+	display: block;
+	height: 100%;
+	width: 0;
+	background: var(--accent);
+}
+/* The 24-hour tile. Same shape as the stock hashrate tiles but a slightly
+   smaller number: it is a sixth panel in a flex row sized for five, so every
+   tile gets narrower and 28px would start wrapping. The asterisk marks a
+   window that spans more than one clock setting or a restart, where the
+   average is a blend rather than a result - the panel's title says what it
+   spans and what the current setting alone is doing. */
+.right .content2 .panlcss.rxd-day-panel { width: 18% !important; }
+
+.right .content2 .panlcss .rxd-day-value {
+	color: var(--accent) !important;
+	font-size: 24px !important;
+	font-weight: 700 !important;
+}
+
+.right .content2 .panlcss .rxd-day-unit { color: var(--text-secondary) !important; }
+
+.right .content2 .panlcss .rxd-day-mark {
+	color: var(--warn, #d9a441) !important;
+	font-size: 16px !important;
+	font-weight: 700 !important;
+	vertical-align: super;
+	margin-left: 2px;
+	cursor: help;
+}
+/* The three added Hash Board columns. Numbers with units, so they must not
+   wrap mid-value when the table is tight. */
+.right .content5 .boardcss .rxd-board-extra { white-space: nowrap; }

@@ -1,0 +1,229 @@
+@CHARSET "UTF-8";
+
+/* Radiant (RXD) themed login - radiantblockchain.org/rxd-brand-guide.html */
+
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+
+:root {
+	--rxd-black: #000000;
+	--rxd-dark-grey: #25252C;
+	--rxd-light-grey: #EDEDED;
+	--rxd-teal: #00F2F2;
+	--rxd-soft-blue: #7FE0FF;
+	--rxd-sky-blue: #00A8DE;
+	--rxd-surface: #16161A;
+	--rxd-border: #35353E;
+	--rxd-text-dim: #9A9AA5;
+}
+
+html, body {
+	height: 100%;
+	margin: 0;
+	background: var(--rxd-black);
+	font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
+	color: var(--rxd-light-grey);
+}
+
+/* Subtle teal glow anchored behind the card */
+body::before {
+	content: '';
+	position: fixed;
+	top: 50%;
+	left: 50%;
+	width: 900px;
+	height: 900px;
+	transform: translate(-50%, -50%);
+	background: radial-gradient(circle, rgba(0, 242, 242, 0.07) 0%, rgba(0, 168, 222, 0.03) 35%, transparent 68%);
+	pointer-events: none;
+	z-index: 0;
+}
+
+.login_main {
+	width: 100%;
+	height: 100%;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	position: relative;
+	z-index: 1;
+}
+
+.login_main .login_div {
+	width: 380px;
+	height: auto;
+	min-height: 300px;
+	background: var(--rxd-surface);
+	border: 1px solid var(--rxd-border);
+	border-radius: 12px;
+	text-align: center;
+	overflow: hidden;
+	box-shadow: 0 16px 48px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(0, 242, 242, 0.06);
+}
+
+/* Radiant symbol above the title, drawn from the brand SVG */
+.login_main .login_div .top {
+	width: 100%;
+	height: auto;
+	padding: 28px 20px 20px;
+	background: transparent;
+	border-radius: 0;
+	border-bottom: 1px solid var(--rxd-border);
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	justify-content: center;
+	gap: 14px;
+	font-size: 15px;
+	font-weight: 600;
+	letter-spacing: 0.5px;
+	color: var(--rxd-text-dim);
+	text-transform: uppercase;
+}
+
+.login_main .login_div .top::before {
+	content: '';
+	display: block;
+	width: 54px;
+	height: 51px;
+	background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg width='145' height='136' viewBox='0 0 145 136' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M88.6944 114.885C89.2163 115.401 89.906 115.675 90.6393 115.675H124.24C124.861 115.675 125.173 114.923 124.733 114.483L62.6656 52.4336C62.1421 51.9102 61.4321 51.6162 60.6918 51.6162H42.9265C36.6362 51.6162 33.4445 59.1721 37.8534 63.6587C51.6499 77.6978 74.3987 100.773 88.6944 114.885Z' fill='%2300F2F2'/%3E%3Cpath d='M72.158 20H18.7025C18.0741 20 17.7638 20.7679 18.2113 21.209C23.4549 26.3766 28.07 31.6859 33.3203 36.9323C33.9127 37.5244 34.5052 38.1164 35.2162 38.59C38.297 40.8398 41.7334 42.0239 45.6437 42.1423H81.6373C82.3483 42.1423 83.0593 42.1423 83.7702 42.2607C88.51 43.208 92.4203 47.9443 91.3539 53.6279C90.5517 57.9793 86.7573 61.2233 82.3285 61.4321C82.0026 61.4474 81.8539 61.842 82.0846 62.0727L97.6305 77.6142C98.2463 78.2298 99.1212 78.5604 99.9733 78.3817C99.9841 78.3795 99.9943 78.3773 100.004 78.3751C101.9 78.0199 103.796 77.191 105.573 76.2438C108.417 74.7045 111.024 72.6915 113.038 70.0866C116.712 65.2318 118.845 59.9035 119.2 53.8647C119.437 51.4965 119.319 49.1284 118.963 46.8786C118.489 43.9184 117.66 41.0766 116.475 38.3532C113.868 32.5512 109.839 27.9333 104.27 24.6179C99.767 22.0129 94.9088 20.7104 89.8135 20.2368C88.3915 20.1184 87.0881 20.1184 85.6661 20.1184C81.1634 20 76.6607 20 72.158 20Z' fill='%2300F2F2'/%3E%3C/svg%3E");
+	background-repeat: no-repeat;
+	background-size: contain;
+	background-position: center;
+	filter: drop-shadow(0 0 14px rgba(0, 242, 242, 0.35));
+}
+
+.login_main .login_div .bottom {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	width: 100%;
+	height: auto;
+	padding: 28px 24px 30px;
+	box-sizing: border-box;
+}
+
+.login_main .login_div .bottom table {
+	margin: 0 auto;
+}
+
+.login_main .login_div .bottom table td {
+	padding: 7px 5px;
+	color: var(--rxd-text-dim);
+	font-size: 13px;
+	text-align: left;
+	white-space: nowrap;
+}
+
+.login_main .login_div .bottom input {
+	width: 210px;
+	height: 38px;
+	background: var(--rxd-dark-grey);
+	border: 1px solid var(--rxd-border);
+	border-radius: 6px;
+	color: var(--rxd-light-grey);
+	padding: 0 12px;
+	font-family: inherit;
+	font-size: 14px;
+	outline: none;
+	transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.login_main .login_div .bottom input:focus {
+	border-color: var(--rxd-teal);
+	box-shadow: 0 0 0 3px rgba(0, 242, 242, 0.12);
+}
+
+.login_main .login_div .bottom input::placeholder {
+	color: #6B6B76;
+}
+
+.login_main .login_div .bottom .loginBtn {
+	background: linear-gradient(135deg, var(--rxd-teal), var(--rxd-sky-blue));
+	color: var(--rxd-black);
+	border: none;
+	border-radius: 6px;
+	width: 100%;
+	max-width: 232px;
+	height: 40px;
+	font-family: inherit;
+	font-size: 14px;
+	font-weight: 600;
+	letter-spacing: 0.4px;
+	cursor: pointer;
+	margin-top: 6px;
+	transition: filter 0.15s ease, transform 0.08s ease;
+}
+
+.login_main .login_div .bottom .loginBtn:hover {
+	filter: brightness(1.12);
+}
+
+.login_main .login_div .bottom .loginBtn:active {
+	transform: translateY(1px);
+}
+
+/* Loading overlay */
+.bardiv {
+	position: absolute;
+	z-index: 999;
+	width: 100%;
+	height: 100%;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	background-color: rgba(0, 0, 0, 0.72);
+	opacity: 1;
+}
+
+.bardivOpacity {
+	opacity: 0.85 !important;
+}
+
+.bar {
+	width: 30%;
+	height: 6px;
+	overflow: hidden;
+	box-sizing: border-box;
+	border-radius: 24px;
+	background-color: rgba(0, 242, 242, 0.12);
+	position: relative;
+}
+
+.bg {
+	width: 50%;
+	height: 100%;
+	overflow: hidden;
+	box-sizing: border-box;
+	background-image: linear-gradient(135deg, #00F2F2 25%, #00A8DE 0, #00A8DE 50%, #00F2F2 0, #00F2F2 75%, #00A8DE 0);
+	border-radius: 24px;
+	background-size: 32px 100%;
+	animation: rxdBarSlide 1s linear infinite;
+}
+
+@keyframes rxdBarSlide {
+	from { background-position: 0 0; }
+	to   { background-position: 32px 0; }
+}
+
+/* Bootbox dialogs on the login page */
+.modal-content {
+	background: var(--rxd-surface) !important;
+	border: 1px solid var(--rxd-border) !important;
+	color: var(--rxd-light-grey) !important;
+	border-radius: 10px !important;
+}
+
+.modal-header, .modal-footer {
+	border-color: var(--rxd-border) !important;
+}
+
+.modal-backdrop {
+	background-color: #000 !important;
+}
+
+.modal-footer .btn-primary {
+	background: linear-gradient(135deg, var(--rxd-teal), var(--rxd-sky-blue)) !important;
+	border: none !important;
+	color: var(--rxd-black) !important;
+	font-weight: 600 !important;
+}
