@@ -79,10 +79,21 @@ temperature and let the ratio move - because a fixed ratio is only correct for
 one ambient temperature, and the stock curve is not configurable at all.
 
 **A swarm page** that shows every RX0 you have added, from any one of their
-dashboards. Miners still on stock firmware show up too, with hashrate,
-temperature, fans, shares and uptime read from their own unauthenticated web
-API - so a new unit appears as soon as it is on the network, before you have
-touched it.
+dashboards, with a total across all of them.
+
+It can also **scan the subnet**, which is more useful than it sounds: unbox a
+miner, plug it in, press Scan, and it is listed - no hunting through the
+router's DHCP table for whatever address the new unit was given. Miners still on
+stock firmware are found and read too, with hashrate, temperature, fans, shares
+and uptime taken from their own unauthenticated web API. So a new RX0 shows up
+complete before you have touched its firmware, which is when you most want to
+look at it: that is when you find out whether it arrived healthy.
+
+Chip count, clock and chip temperature stay blank for a stock miner rather than
+being filled in. The stock payload does report them and they are wrong on an
+RX0 - 18 chips against the 12 fitted, 875 MHz against 775 - so the bridge
+discards them. A blank reads as "not reported", which is true; a number would be
+believed.
 
 **An overclock page**, off unless you pass `--enable-oc`.
 
@@ -105,21 +116,36 @@ temperature:
 | 645 MHz | 267.6 GH/s | 0.415 | 96.0% |
 | 700 MHz | 295.2 GH/s | 0.422 | **97.6%** |
 | 750 MHz | 308.8 GH/s | 0.412 | 95.3% |
-| **775 MHz** | **319.4 GH/s** | 0.412 | 95.4% |
+| **775 MHz** | **324.4 GH/s** | **0.419** | **96.9%** |
+| 790 MHz | 306.5 GH/s | 0.388 | 89.8% |
 | 800 MHz | 295.8 GH/s | 0.370 | 85.6% |
 
-**Output peaked at 775 and 800 fell back below 700.** Per-MHz yield is flat
-from 750 to 775 and then collapses: 750 to 775 buys 3.4% for 3.3% more clock,
-one for one, while 775 to 800 *loses* 7.4% for 3.2% more. It is a plateau
-followed by a cliff, and the cliff edge - 780, 785, 790 - was never measured.
-Chips were no hotter at 775 than at 750 (63.84 average against 63.97 over
-hundreds of samples), so this is not thermal throttling; the chips still
+**Output peaked at 775, and both settings above it came in below 700.**
+Per-MHz yield does not fall from 750 to 775 - it rises - and then gives way:
+750 to 775 buys 5.1% for 3.3% more clock, while 775 to 790 *loses* 5.5% for
+1.9% more and 775 to 800 loses 8.8%. So it is a plateau to 775 followed by a
+fall that begins somewhere in the 15 MHz above it, gradual rather than a step:
+790 already sits two thirds of the way down to 800. Chips were no hotter at 775
+than at 750 (63.84 average against 63.97 over hundreds of samples) and no
+hotter again at 790, so this is not thermal throttling; the chips still
 calibrate and run, they just find fewer nonces per cycle.
+
+That also closes the band. Interpolating the measured slope puts 780 near 318
+and 785 near 312, both below 775, and even if the onset sat just above 780 the
+most it could buy is about 2 GH/s - less than the drift one clock shows across
+a single long run.
 
 So the honest way to pick a value is to run one for **hours** and compare the
 average, not to pick the biggest number that boots. A method that fitted a
 curve to four points and predicted the peak was tried here and was wrong by
-14 GH/s, because it extrapolated across that discontinuity.
+19 GH/s, because it extrapolated across that discontinuity.
+
+The exception is *rejecting* a clock, which is quick. Because the Output
+percentage below scales its denominator with the clock, it is comparable across
+settings in a way raw GH/s is not, and it reads live rather than averaged - 790
+was screened out on four readings over two minutes at eleven minutes of uptime,
+88.8-90.8% against 775's 96.8-98%. Confirming a *small* win still needs the
+hours, because what you are chasing is smaller than the drift within one run.
 
 A clock the board cannot run fails safe: the miner refuses to start rather
 than hashing badly, and the next change brings it back. The page bounds the

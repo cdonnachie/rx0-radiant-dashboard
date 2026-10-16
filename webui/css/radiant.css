@@ -682,6 +682,33 @@ td { color: var(--text-primary) !important; }
 
 	.right .content2 .panlcss:last-child { border-bottom: none !important; }
 
+	/* The first card's status rows are "label ... pill value" on one line,
+	   held there by white-space:nowrap. A flex item's min-width defaults to
+	   auto, so with nowrap the label cannot shrink below its own text - and
+	   the widest row ("5 mins Hashrate" beside "Warming up") then sets a
+	   minimum width the card cannot meet at phone width. The card overflows
+	   and the page pans sideways, while every other card behaves.
+
+	   Let the LABEL wrap and give it min-width:0 so it is allowed to. The
+	   pills keep their nowrap: a two-line label reads fine, "Warming up"
+	   broken across two lines does not. */
+	.right .content2 .panlcss:first-child > div:not(.hidden) {
+		white-space: normal !important;
+		flex-wrap: wrap;
+		column-gap: 8px;
+	}
+
+	.right .content2 .panlcss:first-child > div > span:first-child {
+		min-width: 0 !important;
+		overflow-wrap: anywhere;
+	}
+
+	.right .content2 .panlcss:first-child .content2radiuscss,
+	.right .content2 .panlcss:first-child .rxd-warmup-pill {
+		white-space: nowrap !important;
+		margin-left: 0 !important;
+	}
+
 	.right .content2,
 	.right .content3,
 	.radiant-charts,
@@ -1061,7 +1088,27 @@ td { color: var(--text-primary) !important; }
 	cursor: help;
 }
 
-.rxd-swarm-del, .rxd-swarm-add button {
+.rxd-swarm-actions {
+	white-space: nowrap;
+}
+.rxd-swarm-actions .rxd-swarm-rename {
+	margin-right: 6px;
+}
+
+/* Renaming happens in the miner cell itself, so the field is sized to sit
+   where the name was rather than to fill the column. */
+.rxd-swarm-rename-input {
+	width: 100%;
+	max-width: 180px;
+	background: var(--surface-2, rgba(255, 255, 255, 0.04));
+	border: 1px solid var(--accent);
+	border-radius: 6px;
+	color: var(--text-primary);
+	padding: 5px 8px;
+	font-size: 14px;
+}
+
+.rxd-swarm-rename, .rxd-swarm-del, .rxd-swarm-add button {
 	background: transparent;
 	border: 1px solid var(--border);
 	border-radius: 6px;
@@ -1070,7 +1117,7 @@ td { color: var(--text-primary) !important; }
 	font-size: 13px;
 	cursor: pointer;
 }
-.rxd-swarm-del:hover, .rxd-swarm-add button:hover {
+.rxd-swarm-rename:hover, .rxd-swarm-del:hover, .rxd-swarm-add button:hover {
 	color: var(--text-primary);
 	border-color: var(--accent);
 }

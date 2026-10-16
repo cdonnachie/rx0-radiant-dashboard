@@ -1941,10 +1941,15 @@ function rxdSwarmRow(m) {
 	var tag = m.stock ?
 		' <span class="rxd-swarm-tag" title="Stock firmware: reachable, but ' +
 		'chip detail, overclocking and fan control need this build">stock</span>' : '';
+	// The second line is there to say which address a NAMED miner is at. With
+	// no name the first line is already the address, so printing it again just
+	// shows the same string twice and reads like two different fields - one of
+	// which you then go looking for a meaning for.
+	var sub = (m.name && m.name !== m.host) ?
+		'<div class="rxd-swarm-host">' + rxdFanEscape(m.host) + '</div>' : '';
 	return '<tr' + (m.stock ? ' class="rxd-swarm-stockrow"' : '') + '>' +
 		'<td><span class="rxd-swarm-dot ' + dot + '"></span>' +
-			rxdFanEscape(m.name || m.host) + tag +
-			'<div class="rxd-swarm-host">' + rxdFanEscape(m.host) + '</div></td>' +
+			rxdFanEscape(m.name || m.host) + tag + sub + '</td>' +
 		cell(m.hashrate, ' GH/s') +
 		cell(m.chips) +
 		cell(m.mhz, ' MHz') +
@@ -1953,8 +1958,12 @@ function rxdSwarmRow(m) {
 		cell(m.fanRpm, ' rpm') +
 		'<td>' + shares + '</td>' +
 		cell(rxdSwarmUptime(m.uptime)) +
-		'<td><button type="button" class="rxd-swarm-del" data-host="' +
-			rxdFanEscape(m.host) + '">Remove</button></td>' +
+		'<td class="rxd-swarm-actions">' +
+			'<button type="button" class="rxd-swarm-rename" data-host="' +
+				rxdFanEscape(m.host) + '" data-name="' +
+				rxdFanEscape(m.name || '') + '">Rename</button>' +
+			'<button type="button" class="rxd-swarm-del" data-host="' +
+				rxdFanEscape(m.host) + '">Remove</button></td>' +
 		'</tr>';
 }
 
@@ -2073,6 +2082,42 @@ function rxdAddExtraNav() {
 				peers.push({ host: host, name: name });
 				return peers;
 			});
+		})
+		// Scanning adds peers with no name, and until now the only way to give
+		// one was to retype the address into the Add form - which does rename
+		// rather than duplicate, but nothing on the page says so. Editing the
+		// cell in place is the obvious gesture, and it reuses the same mutate.
+		.on('click', '.rxd-swarm-rename', function() {
+			var btn = $(this);
+			var host = String(btn.data('host'));
+			var cell = btn.closest('tr').children('td').first();
+			if (cell.find('.rxd-swarm-rename-input').length) return;
+
+			var input = $('<input type="text" class="rxd-swarm-rename-input">')
+				.val(btn.data('name') || '')
+				.attr('placeholder', host)
+				.attr('aria-label', 'Name for ' + host);
+			cell.empty().append(input);
+			input.trigger('focus').trigger('select');
+
+			// Enter and losing focus both commit; Escape abandons. The guard
+			// matters because committing re-renders the table, which blurs the
+			// input and would otherwise run the save a second time.
+			var settled = false;
+			function commit() {
+				if (settled) return;
+				settled = true;
+				var name = $.trim(input.val());
+				rxdSwarmMutate(function(peers) {
+					return peers.map(function(p) {
+						return p.host === host ? { host: host, name: name } : p;
+					});
+				});
+			}
+			input.on('keydown', function(e) {
+				if (e.which === 13) { commit(); }
+				else if (e.which === 27) { settled = true; rxdSwarmLoad(); }
+			}).on('blur', commit);
 		})
 		.on('click', '.rxd-swarm-del', function() {
 			var host = $(this).data('host');
