@@ -31,8 +31,12 @@ function extract(name) {
 }
 
 const RXD_SNAP_MS = 150000;
+// From source, so moving the constant fails the test rather than passing a
+// stale copy of it.
+const RXD_TEMP_SENTINEL = Number(/RXD_TEMP_SENTINEL = (\d+)/.exec(src)[1]);
 eval(extract('rxdNum'));
 eval(extract('rxdGap'));
+eval(extract('rxdTempGap'));
 eval(extract('rxdSnapWindow'));
 eval(extract('rxdSnap'));
 eval(extract('rxdPoolState'));
@@ -57,6 +61,32 @@ check('a real reading passes through', rxdGap(1162), 1162);
 check('a real reading as a string', rxdGap('1162'), 1162);
 check('a fractional reading', rxdGap(66.5), 66.5);
 check('6034 rpm, the fan at maximum', rxdGap(6034), 6034);
+
+console.log('');
+console.log('rxdTempGap: 127 is the PCB sensors\' failed read, not a temperature');
+// 0x7F, the ceiling of the signed byte the firmware reports whole degrees in.
+// Five in 8,630 samples of his.log, and every one of them is a misread: the
+// distribution stops dead at 84 C and resumes at exactly 127, the other sensor
+// read normally in the same pass, and the chips - which heat the board, so are
+// always the hotter of the two - read 76 C at the time.
+check('the sentinel is a gap', rxdTempGap(127), null);
+check('as a string too', rxdTempGap('127'), null);
+check('127.0 is the same value', rxdTempGap(127.0), null);
+check('the constant is what is filtered', rxdTempGap(RXD_TEMP_SENTINEL), null);
+// Exact equality, not a ceiling: the sensors are really 12-bit (0.0625 C) and
+// the firmware throws four bits away, so if the bridge ever exposes the low
+// bits a genuine reading near the sentinel must still plot.
+check('126 is a temperature', rxdTempGap(126), 126);
+check('128 is a temperature', rxdTempGap(128), 128);
+check('126.9375, one LSB below it', rxdTempGap(126.9375), 126.9375);
+check('127.0625, one LSB above it', rxdTempGap(127.0625), 127.0625);
+check('and it still gaps a 0 like rxdGap', rxdTempGap(0), null);
+check('and a failed read', rxdTempGap('--'), null);
+check('a normal board temperature', rxdTempGap(71), 71);
+// Only the two PCB sensors. A tach is on the same series machinery but 127 rpm
+// is a plausible reading, so the fans deliberately keep plain rxdGap.
+check('rxdGap leaves 127 alone, which is why the fans use it',
+    rxdGap(RXD_TEMP_SENTINEL), 127);
 
 console.log('');
 console.log('rxdNum is unchanged - 0 still means 0 where a count is wanted');

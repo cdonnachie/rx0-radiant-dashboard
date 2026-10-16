@@ -165,6 +165,34 @@ function rxdGap(v) {
 	return (isFinite(n) && n !== 0) ? n : null;
 }
 
+/* The other end of the same problem: 127 is the PCB sensors' failed read.
+ *
+ * 0x7F is the ceiling of the signed byte the stock firmware reports whole
+ * degrees in, and the two board sensors land on it occasionally - five times
+ * in 8,630 samples of his.log, 0.06%, both sensors affected. Every one is a
+ * misread rather than a temperature:
+ *
+ * - the distribution runs continuously up to 84 C, then nothing at all
+ *   between 85 and 126, then exactly 127. A real excursion fills in the climb.
+ * - the other sensor read normally in the same sampling pass (54 C while
+ *   temp1 claimed 127). Both sit on one small PCB.
+ * - the chips read 76 C at that instant, and the board is heated BY the chips,
+ *   so it is always the cooler of the two. 127 under 76 is backwards.
+ * - always one isolated sample, never two in a row, hashrate unaffected.
+ *
+ * Exact equality, not a ceiling: the sensors are really 12-bit (0.0625 C) and
+ * if the bridge ever exposes the low bits, a genuine reading near 127 should
+ * still plot. What cannot be genuine is the saturation value itself.
+ *
+ * Only the two PCB sensors. The per-chip temperatures come over SPI, not the
+ * bit-banged I2C bus these are on, and have never shown this value. */
+var RXD_TEMP_SENTINEL = 127;
+
+function rxdTempGap(v) {
+	var n = rxdGap(v);
+	return n === RXD_TEMP_SENTINEL ? null : n;
+}
+
 var RXD_UNIT_TO_GH = { H: 1e-9, K: 1e-6, M: 1e-3, G: 1, T: 1e3, P: 1e6 };
 
 /* Whole-miner hashrate in GH/s, whatever state the payload is in.
@@ -239,11 +267,11 @@ function rxdRecordData(data) {
 	h.timestamps.push(ts);
 	h.hashrate.push(Math.round(rxdHashrateGH(data) * 100) / 100);
 
-	// rxdGap, not rxdNum: the locally recorded history feeds the same charts,
-	// so a sensor that did not answer has to leave a gap here too.
+	// rxdTempGap, not rxdNum: the locally recorded history feeds the same
+	// charts, so a sensor that did not answer has to leave a gap here too.
 	var b = (data.boards && data.boards[0]) ? data.boards[0] : {};
-	h.temp1.push(rxdGap(b.intmp));
-	h.temp2.push(rxdGap(b.outtmp));
+	h.temp1.push(rxdTempGap(b.intmp));
+	h.temp2.push(rxdTempGap(b.outtmp));
 
 	var fans = data.fans || [];
 	h.fan1.push(rxdGap(fans[0]));
@@ -356,8 +384,8 @@ function rxdSeedHistory(payload) {
 		// The instant, not a label. rxdTimeLabels renders it at draw time.
 		seeded.timestamps.push(when);
 		seeded.hashrate.push(point[1]);
-		seeded.temp1.push(rxdGap(t1 && t1[1]));
-		seeded.temp2.push(rxdGap(t2 && t2[1]));
+		seeded.temp1.push(rxdTempGap(t1 && t1[1]));
+		seeded.temp2.push(rxdTempGap(t2 && t2[1]));
 		seeded.fan1.push(rxdGap(fan && fan[1]));
 		seeded.fan2.push(rxdGap(fan && fan[2]));
 	});
@@ -1118,10 +1146,14 @@ function rxdRenderHealth(data) {
 	rxdHealthValue(panel, '.volcss', fans.length ? Math.max.apply(null, fans) + ' rpm' : '');
 
 	// intmp/outtmp are the two board sensors - the hot one is what matters.
+	// Through rxdTempGap, so a 0 or a 127 sentinel is not "the hot one": this
+	// tile reports a maximum, which is exactly where one bad read does the
+	// most damage.
 	var temps = [];
 	(data.boards || []).forEach(function(b) {
-		if (b.intmp) temps.push(b.intmp);
-		if (b.outtmp) temps.push(b.outtmp);
+		[rxdTempGap(b.intmp), rxdTempGap(b.outtmp)].forEach(function(t) {
+			if (t !== null) temps.push(t);
+		});
 	});
 	rxdHealthValue(panel, '.temcss', temps.length ? Math.round(Math.max.apply(null, temps)) + ' °C' : '');
 

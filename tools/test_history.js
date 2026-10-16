@@ -52,6 +52,7 @@ function extract(name) {
 // Pulled from source so the test fails if the constant moves.
 const RXD_MIN_SAMPLE_GAP_MS = Number(/RXD_MIN_SAMPLE_GAP_MS = (\d+)/.exec(src)[1]);
 const RXD_SNAP_MS = Number(/RXD_SNAP_MS = (\d+)/.exec(src)[1]);
+const RXD_TEMP_SENTINEL = Number(/RXD_TEMP_SENTINEL = (\d+)/.exec(src)[1]);
 const RXD = {
     chipHistory: { timestamps: [], boards: {} },
     history: { timestamps: [], hashrate: [], temp1: [], temp2: [], fan1: [], fan2: [] },
@@ -66,6 +67,7 @@ function rxdParseHashrate() { return 0; }
 eval(extract('rxdClock'));
 eval(extract('rxdNum'));
 eval(extract('rxdGap'));
+eval(extract('rxdTempGap'));
 eval(extract('rxdHashrateGH'));
 eval(extract('rxdSnapWindow'));
 eval(extract('rxdSnap'));
@@ -266,6 +268,37 @@ check('and they are the payload\'s own instants',
 check('rendering them agrees with the chip row',
     rxdTimeLabels(RXD.history)[19], rxdClock(NOW));
 check('a short payload is refused', rxdSeedHistory({ hashrate: [] }), false);
+
+console.log('');
+console.log('127 C reaches the chart through both paths, and is a gap in both');
+// The real shape from his.log: one isolated sentinel in an otherwise healthy
+// series, the other sensor reading normally in the same pass.
+const spiked = payload(NOW, 20, 302000);
+spiked.boards['1'].pcbtemp1[7][1] = RXD_TEMP_SENTINEL;
+spiked.boards['1'].pcbtemp2[12][1] = RXD_TEMP_SENTINEL;
+RXD.history = { timestamps: [], hashrate: [], temp1: [], temp2: [], fan1: [], fan2: [] };
+rxdSeedHistory(spiked);
+check('the seeded sentinel is a gap', RXD.history.temp1[7], null);
+check('on the other sensor too', RXD.history.temp2[12], null);
+check('no 127 anywhere in the seeded series',
+    RXD.history.temp1.concat(RXD.history.temp2)
+        .filter(v => v === RXD_TEMP_SENTINEL).length, 0);
+check('its neighbours are untouched',
+    [RXD.history.temp1[6], RXD.history.temp1[8]], [71, 71]);
+check('the sample itself is kept - only that one reading is missing',
+    RXD.history.timestamps.length, 20);
+check('and the hashrate at that instant still plots',
+    RXD.history.hashrate[7] > 0, true);
+
+// The live path: the panel can carry one before the next re-seed covers it.
+RXD.history = { timestamps: [], hashrate: [], temp1: [], temp2: [], fan1: [], fan2: [] };
+at(NOW, () => rxdRecordData({ rtpow_hash: 324, rtpow_unit: 'G',
+    fans: [1206, 1198], boards: [{ intmp: RXD_TEMP_SENTINEL, outtmp: 49 }] }));
+check('a live sentinel is a gap', RXD.history.temp1[0], null);
+check('the sensor that answered is kept', RXD.history.temp2[0], 49);
+
+// rxdTempGap's own semantics - which value is filtered and which is not -
+// live in test_sensorgap.js, beside rxdGap's.
 
 console.log('');
 console.log('the eviction that made a 24 h chart into a 4.8 h one');
