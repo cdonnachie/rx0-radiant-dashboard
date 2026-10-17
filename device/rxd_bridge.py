@@ -20,10 +20,12 @@ writers on the same port. The log files it reads are opened read-only.
 Python 2.7 (that is what ships on the device).
 """
 
+import errno
 import json
 import os
 import re
 import socket
+import sys
 import ssl
 import subprocess
 import threading
@@ -111,8 +113,49 @@ CHIP_LOG_MAX = 1024 * 1024      # ~2 weeks; halved in place when it trips
 # group `disk`, with no help from this bridge. The kernel has ext2/3/4, vfat
 # and msdos built in - NOT exfat or ntfs, which is why a stock 64 GB card must
 # be reformatted before it is any use here.
+# --- the bridge's own log -----------------------------------------------------
+#
+# /etc/init.d/rxdbridge redirects stdout and stderr into /var/log/rxdbridge.log,
+# and for a long time nothing ever wrote to it: request logging is suppressed
+# (see Handler.log_message) and there was not one print statement in this file,
+# so the whole contents were a single stray traceback. Empty is a reasonable
+# state for a crash log, but it could not answer "has the bridge restarted?"
+# either, which is the first thing anyone asks it.
+#
+# Deliberately sparse: startup, state CHANGES, and work actually done. One line
+# per request is exactly the noise log_message exists to suppress, and routine
+# five-minute archiving is not an event - it is the normal state of affairs.
+#
+# Stamped like the miner's own logs, which is also what lets archive_logs()
+# handle this file by timestamp rather than falling back to de-duplicating it
+# by content.
+_LOG_LOCK = threading.Lock()
+
+
+def log(message):
+    """One timestamped line into /var/log/rxdbridge.log.
+
+    Flushed every time. Python block-buffers stdout when it is a file rather
+    than a terminal, so without this a line could sit in the buffer for hours
+    - and a log that lags is worse than no log, because it reads as "nothing
+    happened" exactly when something did.
+    """
+    line = '%s  %s\n' % (time.strftime('%Y-%m-%d %H:%M:%S'), message)
+    try:
+        with _LOG_LOCK:
+            sys.stdout.write(line)
+            sys.stdout.flush()
+    except (IOError, ValueError):
+        pass        # a closed or full stdout must never take the bridge down
+
+
 SD_MEDIA = '/run/media'
 SD_LOG_NAME = 'rxd_chips.log'
+
+# Everything this bridge writes to a card goes in ONE folder, so "where are the
+# logs" has a single answer instead of one file at the card's root and the rest
+# in a subdirectory. The archiver further down writes here too.
+ARCHIVE_DIR_NAME = 'logs'
 
 
 def _is_mount(path):
@@ -145,22 +188,69 @@ def sd_log_dir():
     return None
 
 
-def chip_log_target():
-    """Where a new sample goes: the card if there is one, else NAND."""
+def sd_log_folder(sd=None):
+    """<mount>/logs, created on demand, or None if it cannot be had.
+
+    None rather than the bare mountpoint on failure, deliberately: a caller
+    that fell back to the mount would scatter files across the card's root
+    again, which is the inconsistency this folder exists to remove.
+    """
+    if sd is None:
+        sd = sd_log_dir()
+    if not sd:
+        return None
+    folder = os.path.join(sd, ARCHIVE_DIR_NAME)
+    try:
+        if not os.path.isdir(folder):
+            os.mkdir(folder)
+    except (IOError, OSError):
+        return None
+    return folder
+
+
+def chip_log_target(migrate=True):
+    """Where a new sample goes: the card if there is one, else NAND.
+
+    Cards written by an earlier build have the chip log at the root. It is
+    moved into the folder on sight - one rename, and the data stays put if the
+    rename fails rather than splitting the history across two files.
+
+    migrate=False answers the question without doing the move, which is what
+    /about wants: reporting a path is not a reason to rewrite the card.
+    """
     sd = sd_log_dir()
-    return os.path.join(sd, SD_LOG_NAME) if sd else CHIP_LOG
+    if not sd:
+        return CHIP_LOG
+    legacy = os.path.join(sd, SD_LOG_NAME)
+    folder = sd_log_folder(sd)
+    if not folder:
+        # A writable card whose folder cannot be made: keep appending to the
+        # root file if that is where the history already is, else use NAND.
+        return legacy if os.path.exists(legacy) else CHIP_LOG
+    target = os.path.join(folder, SD_LOG_NAME)
+    if not os.path.exists(target) and os.path.exists(legacy):
+        if not migrate:
+            return legacy
+        try:
+            os.rename(legacy, target)
+        except OSError:
+            return legacy
+    return target
 
 
 def chip_log_sources():
     """Every log history should be read from, NAND first.
 
-    Both, deliberately. NAND holds the samples taken before a card went in and
-    the card holds everything since, so reading either alone would blank a day
-    of charts - once when the card is inserted, and again if it is removed.
+    All of them, deliberately. NAND holds the samples taken before a card went
+    in and the card holds everything since, so reading either alone would blank
+    a day of charts - once when the card is inserted, and again if it is
+    removed. The card's root is still read for a card whose file has not been
+    moved into the folder yet, so the move can never lose a day either.
     """
     paths = [CHIP_LOG]
     sd = sd_log_dir()
     if sd:
+        paths.append(os.path.join(sd, ARCHIVE_DIR_NAME, SD_LOG_NAME))
         paths.append(os.path.join(sd, SD_LOG_NAME))
     return [p for p in paths if os.path.exists(p)]
 
@@ -831,12 +921,408 @@ def record_chip_sample():
     trim_chip_log()
 
 
+# --- archiving the logs that do not survive -----------------------------------
+#
+# Three different ways these files lose data, and a card fixes all three:
+#
+#   run.log    the miner TRUNCATES it at every startup. It is where the
+#              firmware installer writes one line per block it ran, so a
+#              reboot after an upload destroys the only record of what
+#              actually installed - which happened twice before this existed.
+#   his.log    written ONCE PER BOOT: `reset` appends the previous boot's
+#              run.log to it and trims from the front to exactly 2 MiB, which
+#              severs line 1 mid-timestamp. About a 17 day window, and
+#              everything /history replays comes out of it. Its mtime sitting
+#              hours old is therefore normal - it is not a continuous log, and
+#              the gaps inside it are run.log's cadence, not its own.
+#   /var/log/  a symlink into tmpfs, so every daemon log there dies on reboot.
+#              rxdfan.log is the loss that matters: in target mode it records
+#              the controller's decisions and the temperature behind each one.
+ARCHIVED_LOGS = [
+    '/var/order/run.log',
+    '/var/order/his.log',
+    '/var/log/rxdbridge.log',
+    '/var/log/rxdfan.log',
+    '/var/log/rxdweb.log',
+    '/var/log/rxdsetup.log',
+]
+
+# 'YYYY-MM-DD HH:MM:SS' sorts chronologically as a STRING, so none of this has
+# to parse a date.
+LOG_STAMP = re.compile(r'^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})')
+LOG_TAIL_WINDOW = 8192
+
+
+def _line_stamp(line):
+    found = LOG_STAMP.match(line)
+    return found.group(1) if found else None
+
+
+def _log_tail(path, window=LOG_TAIL_WINDOW):
+    """(recent lines, newest timestamp) from the end of an archive.
+
+    Only the tail is read: his.log's archive grows without limit and there is
+    no reason to read megabytes to find out where we stopped. Seeking into the
+    middle of a line is harmless - a fragment matches nothing and carries no
+    timestamp.
+    """
+    try:
+        size = os.path.getsize(path)
+        handle = open(path)
+        try:
+            if size > window:
+                handle.seek(size - window)
+            text = handle.read()
+        finally:
+            handle.close()
+    except (IOError, OSError):
+        return set(), None
+
+    stamp = None
+    lines = text.split('\n')
+    for line in lines:
+        found = _line_stamp(line)
+        if found:
+            stamp = found
+    return set(lines), stamp
+
+
+def _archive_one(src, dest):
+    """Append the lines of `src` that are not in `dest` yet.
+
+    Keyed on the timestamp rather than a byte offset, which is what makes it
+    survive truncation and an in-place ring alike: an offset into either is
+    meaningless the moment the file is rewritten underneath it.
+
+    Two details that are easy to get wrong:
+
+    - Lines sharing the SAME second as the last archived one cannot be decided
+      by timestamp. Skipping them loses the rest of that second; re-appending
+      them duplicates it on every pass. So they are matched against the tail
+      just read, which is exact for anything written in the last few KB - and
+      a boundary line is necessarily there.
+    - A line with no timestamp of its own inherits the last one seen, because
+      rxdweb.log indents its detail under a stamped heading and separating
+      those would be worse than not archiving them.
+
+    And one file shape that broke the first version of this: a log with NO
+    timestamps anywhere. rxdbridge.log is the bridge's own stdout, so nothing
+    in it is stamped - which meant every line looked like it predated the
+    archive and the whole file was re-appended on every pass. Those are
+    de-duplicated by content instead, which is exact for them (small,
+    append-only) and has the useful side effect that a tmpfs log restarting
+    from empty after a reboot does not duplicate what was already saved. The
+    cost is that a genuinely repeated identical line is only kept once.
+    """
+    # A small source is compared against at least its own length of archive,
+    # so content de-duplication below can actually find its lines. his.log
+    # keeps the default: it is stamped, so only the boundary second matters.
+    try:
+        window = max(LOG_TAIL_WINDOW, os.path.getsize(src) + 4096)
+        if window > 262144:
+            window = LOG_TAIL_WINDOW
+    except (IOError, OSError):
+        window = LOG_TAIL_WINDOW
+    recent, last = _log_tail(dest, window)
+
+    pre = []            # lines before any timestamp appears
+    pending = []
+    handle = open(src)
+    try:
+        stamp = None
+        first = None
+        for line in handle:
+            found = _line_stamp(line)
+            if found:
+                stamp = found
+                if first is None:
+                    first = found
+            if stamp is None:
+                pre.append(line)
+                continue
+            if last is None or stamp > last:
+                pending.append(line)
+            elif stamp == last and line.rstrip('\n') not in recent:
+                pending.append(line)
+    finally:
+        handle.close()
+
+    if stamp is None:
+        # The file has no timestamps at all: decide every line by content.
+        pending = [l for l in pre if l.rstrip('\n') not in recent]
+    elif last is None or first > last:
+        # Keep the lines before the first stamp when this is either the first
+        # archive, or a file that restarted AFTER everything already archived.
+        #
+        # That second case is what the first version of this got wrong, and it
+        # cost the kernel boot log. run.log is recreated at every boot with the
+        # whole dmesg at its head, unstamped, and its first stamped line is
+        # necessarily newer than anything archived from the previous boot - so
+        # that block is new content. his.log is the opposite shape: trimmed
+        # from the front, its first stamp is OLDER than the archive's newest,
+        # and its leading severed line is a fragment of something already held.
+        # Comparing the file's FIRST stamp against the archive's last separates
+        # them exactly; "has it been archived before" does not.
+        pending = pre + pending
+    # Otherwise `pre` is dropped: a stamped file whose first stamp we already
+    # hold begins with a fragment, not with new content.
+
+    if not pending:
+        return 0
+    handle = open(dest, 'a')
+    try:
+        handle.writelines(pending)
+    finally:
+        handle.close()
+    return len(pending)
+
+
+def _chip_last_stamp(path, window=4096):
+    """The newest epoch second in a chip log, read from its tail."""
+    try:
+        size = os.path.getsize(path)
+        handle = open(path)
+        try:
+            if size > window:
+                handle.seek(size - window)
+            text = handle.read()
+        finally:
+            handle.close()
+    except (IOError, OSError):
+        return None
+
+    stamp = None
+    for line in text.split('\n'):
+        bits = line.split()
+        if bits and bits[0].isdigit():
+            stamp = int(bits[0])
+    return stamp
+
+
+def sync_chip_log():
+    """Copy samples taken while the card was out of the slot onto the card.
+
+    The CHARTS never needed this: chip_log_sources() reads both stores and
+    _chip_rows() merges them, which is why pulling a card has always been safe
+    for the dashboard. The DOWNLOAD did. rxd_chips.log on the card would
+    silently lack every hour the card spent out of the slot, while the
+    dashboard drawn from those same samples showed them - a file that looks
+    complete and is not, which is worse than one that is obviously partial.
+
+    Both stores are append-only and in time order, so the newest stamp in each
+    tail decides it, and the ordinary case - card in all along, NAND frozen
+    where it was - costs two 4 KB reads and nothing else.
+    """
+    folder = sd_log_folder()
+    if not folder or not os.path.exists(CHIP_LOG):
+        return 0
+
+    card = os.path.join(folder, SD_LOG_NAME)
+    on_card = _chip_last_stamp(card)
+    on_nand = _chip_last_stamp(CHIP_LOG)
+    if on_nand is None:
+        return 0
+    if on_card is not None and on_nand <= on_card:
+        return 0            # the usual case: NAND has nothing newer
+
+    pending = []
+    handle = open(CHIP_LOG)
+    try:
+        for line in handle:
+            bits = line.split()
+            if not bits or not bits[0].isdigit():
+                continue
+            if on_card is None or int(bits[0]) > on_card:
+                pending.append(line if line.endswith('\n') else line + '\n')
+    finally:
+        handle.close()
+
+    if not pending:
+        return 0
+    handle = open(card, 'a')
+    try:
+        handle.writelines(pending)
+    finally:
+        handle.close()
+    # Worth a line: this only happens after the card has been out, and it is
+    # the record of how long for.
+    log('copied %d chip samples taken while the card was out' % len(pending))
+    return len(pending)
+
+
+def archive_logs():
+    """Copy new log lines onto the card. Does nothing without one.
+
+    A no-op with no card by design: duplicating NAND logs onto the same NAND
+    would burn flash for nothing.
+    """
+    folder = sd_log_folder()
+    if not folder:
+        return 0
+
+    written = 0
+    # Catch the card up on anything NAND recorded while it was out. Done here
+    # so that asking for the file (which refreshes first) is enough to get a
+    # complete one.
+    try:
+        written += sync_chip_log()
+    except (IOError, OSError):
+        pass
+    for src in ARCHIVED_LOGS:
+        if not os.path.exists(src):
+            continue        # not written yet this boot; not an error
+        try:
+            written += _archive_one(
+                src, os.path.join(folder, os.path.basename(src)))
+        except (IOError, OSError):
+            continue        # card pulled mid-copy; the next pass catches up
+    return written
+
+
+# Card presence is logged on CHANGE only. Polled every five minutes, so a line
+# per poll would be 288 a day saying nothing; a line when it appears or goes is
+# the whole signal, and it is what explains a gap in the chip history later.
+_CARD_PRESENT = [None]
+
+
+def note_card_state():
+    """Log the card arriving or leaving. Returns True while one is mounted."""
+    here = sd_log_dir() is not None
+    if _CARD_PRESENT[0] is None:
+        _CARD_PRESENT[0] = here         # first look: the startup line said it
+        return here
+    if here != _CARD_PRESENT[0]:
+        _CARD_PRESENT[0] = here
+        if here:
+            log('card inserted; %s' % _card_summary())
+        else:
+            log('card removed; samples and archiving fall back to flash')
+    return here
+
+
+# --- serving those archives back ----------------------------------------------
+#
+# The stock Log Download tab can only ever offer two files from NAND: its
+# backend copies /var/order/{run,his}.log into the web root and links to the
+# copies. The card holds strictly more - run.log for every boot rather than
+# only this one, the four daemon logs that tmpfs destroys at each reboot, and
+# the chip log this dashboard's charts are drawn from - so the bridge serves
+# them itself.
+#
+# (name, what it is, where it lives when there is no card, what that place IS)
+#
+# That last field is not decoration. /var/order is jffs2 on the mtd and
+# survives a reboot; /var/log is a symlink to /var/volatile/log, which is
+# tmpfs, so those four exist only in RAM and are gone at the next boot. A
+# table that called both "internal flash" would be wrong about the single
+# thing the column is there to answer.
+DOWNLOAD_LOGS = [
+    ('run.log', 'Miner log. On the card: every boot, not just this one.',
+     '/var/order/run.log', 'nand'),
+    ('his.log', 'Miner history, rolled over from run.log at each boot.',
+     '/var/order/his.log', 'nand'),
+    ('rxd_chips.log', 'Per-chip temperature, voltage and clock samples.',
+     CHIP_LOG, 'nand'),
+    ('rxdbridge.log', 'This bridge\'s own output.',
+     '/var/log/rxdbridge.log', 'ram'),
+    ('rxdfan.log', 'Fan controller decisions and the temperature behind each.',
+     '/var/log/rxdfan.log', 'ram'),
+    ('rxdweb.log', 'Web patcher.', '/var/log/rxdweb.log', 'ram'),
+    ('rxdsetup.log', 'Installer.', '/var/log/rxdsetup.log', 'ram'),
+]
+
+
+def _mac_tag():
+    """A short machine tag for download filenames, as the stock page does.
+
+    Two RX0s produce two `his.log`s, and a browser silently renames the second
+    rather than telling you they are different machines.
+    """
+    mac = (_read_first('/sys/class/net/eth0/address') or '').strip()
+    mac = mac.replace(':', '')
+    return mac or 'rx0'
+
+
+def log_catalogue(refresh=True):
+    """Every downloadable log, the card's copy preferred over NAND.
+
+    The card copy wins because it is a superset: it survives the truncation,
+    the boot-time rollover and the tmpfs wipe that each destroy the local one.
+    Its one weakness is that it lags by up to one archive pass, so a pass runs
+    first - which is cheap, and makes a download complete AND current rather
+    than making the user choose.
+    """
+    if refresh:
+        try:
+            archive_logs()
+        except (IOError, OSError):
+            pass            # no card, or pulled mid-pass; fall back below
+
+    sd = sd_log_dir()
+    # Deliberately not sd_log_folder(): listing logs must not create anything.
+    folder = os.path.join(sd, ARCHIVE_DIR_NAME) if sd else None
+
+    out = []
+    for name, label, local, kind in DOWNLOAD_LOGS:
+        path, source = local, kind
+        if folder:
+            card = os.path.join(folder, name)
+            if os.path.exists(card):
+                path, source = card, 'card'
+        try:
+            stat = os.stat(path)
+        except OSError:
+            continue        # never written on this machine; not an error
+        out.append({'name': name, 'label': label, 'source': source,
+                    'bytes': stat.st_size,
+                    'modified': int(stat.st_mtime * 1000)})
+    return out
+
+
+def log_file(name):
+    """(path, download filename) for a log name, or None if it is not one.
+
+    The name is matched against the catalogue; it is never joined onto a
+    directory. No part of a request reaches the filesystem as a path, so
+    `../../etc/shadow` is simply not a log name and gets a 404.
+    """
+    for entry in log_catalogue(refresh=False):
+        if entry['name'] == name:
+            sd = sd_log_dir()
+            if entry['source'] == 'card' and sd:
+                path = os.path.join(sd, ARCHIVE_DIR_NAME, name)
+            else:
+                path = dict((n, p) for n, _, p, _k in DOWNLOAD_LOGS)[name]
+            return path, '%s_%s' % (_mac_tag(), name)
+    return None
+
+
 def chip_sampler():
     """Background sampler. Never lets an error kill the thread - a missed
     sample is a gap in a chart; a dead thread is every future sample lost."""
+    # Logged on change, not per failure: a miner that is down produces one
+    # failure every five minutes, and 288 identical lines a day would bury the
+    # moment it started. The recovery line is what makes the first one safe to
+    # ignore when it is only the miner restarting.
+    failing = [False]
+
     while True:
         try:
             record_chip_sample()
+            if failing[0]:
+                failing[0] = False
+                log('chip sampling recovered')
+        except Exception, ex:
+            if not failing[0]:
+                failing[0] = True
+                log('chip sampling failed: %s' % ex)
+
+        # Same timer, because both exist to preserve history and neither is
+        # urgent. Guarded separately: failing to archive must not cost a chip
+        # sample.
+        try:
+            note_card_state()
+            archive_logs()
         except Exception:
             pass
         time.sleep(CHIP_SAMPLE_SECONDS)
@@ -1063,7 +1549,7 @@ def sd_status():
     """
     mount = sd_log_dir()
     info = {'card': None, 'mount': mount, 'free': None, 'total': None,
-            'log': chip_log_target()}
+            'log': chip_log_target(migrate=False)}
 
     # The card's own name, so the page can say WHICH card is in there.
     try:
@@ -1755,6 +2241,43 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _send_file(self, path, filename):
+        """Serve a log as a download.
+
+        The size is read once and honoured exactly. These files are appended
+        to while they are being served, and this is HTTP/1.1 with keep-alive:
+        writing a byte more or less than the promised Content-Length leaves
+        the connection out of step and corrupts whatever is requested next.
+        """
+        try:
+            size = os.path.getsize(path)
+            handle = open(path, 'rb')
+        except (IOError, OSError), ex:
+            self._send(404, {'error': str(ex)})
+            return
+
+        try:
+            self.send_response(200)
+            self.send_header('Content-Type', 'text/plain; charset=utf-8')
+            self.send_header('Content-Length', str(size))
+            self.send_header('Content-Disposition',
+                             'attachment; filename="%s"' % filename)
+            self.send_header('Access-Control-Allow-Origin', '*')
+            self.send_header('Cache-Control', 'no-store')
+            self.end_headers()
+
+            sent = 0
+            while sent < size:
+                chunk = handle.read(min(65536, size - sent))
+                if not chunk:
+                    break               # truncated under us
+                self.wfile.write(chunk)
+                sent += len(chunk)
+            if sent < size:
+                self.wfile.write('\n' * (size - sent))
+        finally:
+            handle.close()
+
     def do_GET(self):
         parts = urlparse.urlparse(self.path)
         path = parts.path.rstrip('/')
@@ -1769,6 +2292,23 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(200, payload)
             except Exception, ex:
                 self._send(503, {'error': str(ex)})
+            return
+
+        if path == '/logs':
+            try:
+                self._send(200, {'logs': log_catalogue(),
+                                 'card': sd_log_dir() is not None})
+            except Exception, ex:
+                self._send(503, {'error': str(ex)})
+            return
+
+        if path == '/logfile':
+            name = (query.get('name') or [''])[0]
+            found = log_file(name)
+            if not found:
+                self._send(404, {'error': 'not a log: %s' % name})
+                return
+            self._send_file(found[0], found[1])
             return
 
         if path == '/history':
@@ -2019,6 +2559,28 @@ class Server(SocketServer.ThreadingMixIn, HTTPServer):
     daemon_threads = True
     allow_reuse_address = True
 
+    def handle_error(self, request, client_address):
+        """Keep a client hanging up out of the log.
+
+        A browser that navigates away, times out a poll, or closes a download
+        it already has resets the connection, and SocketServer's default is to
+        print the whole traceback. That is not a fault - it is the single most
+        ordinary thing a client does - and it had made rxdbridge.log a file
+        that contained nothing BUT those tracebacks. Anything else still goes
+        to stderr, because a real error in here needs to be findable.
+        """
+        error = sys.exc_info()[1]
+        number = getattr(error, 'errno', None)
+        if number is None and getattr(error, 'args', None):
+            first = error.args[0]
+            if isinstance(first, int):
+                number = first
+        if number in (errno.ECONNRESET, errno.EPIPE, errno.ECONNABORTED):
+            return
+        if isinstance(error, socket.timeout):
+            return
+        HTTPServer.handle_error(self, request, client_address)
+
 
 def serve_tls():
     """TLS copy of the same handler. Missing or unreadable certs are not fatal:
@@ -2037,8 +2599,25 @@ def serve_tls():
     return server
 
 
+def _card_summary():
+    """'card mounted, 31.2 GB free' / 'no card' - for one startup line."""
+    sd = sd_log_dir()
+    if not sd:
+        return 'no card'
+    space = _free_mb(sd)
+    if not space or not space.get('free'):
+        return 'card mounted at %s' % sd
+    free = space['free']
+    size = ('%.1f GB' % (free / 1024.0)) if free >= 1024 else ('%d MB' % free)
+    return 'card mounted at %s, %s free' % (sd, size)
+
+
 if __name__ == '__main__':
-    serve_tls()
+    tls = serve_tls()
+    log('bridge up; http %d, %s; %s'
+        % (LISTEN_PORT,
+           ('tls %d' % TLS_PORT) if tls else 'tls off (no usable certificate)',
+           _card_summary()))
     sampler = threading.Thread(target=chip_sampler)
     sampler.daemon = True
     sampler.start()

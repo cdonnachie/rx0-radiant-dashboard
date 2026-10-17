@@ -2778,6 +2778,120 @@ function rxdUpdateCharts() {
 	}
 }
 
+/* ------------------------------------------------------------- log downloads
+
+   The stock Log Download tab offers exactly two files, both from internal
+   flash: its backend copies /var/order/{run,his}.log into the web root and
+   links to the copies. Everything the card holds is invisible to it - run.log
+   for every boot instead of only this one, the four daemon logs that tmpfs
+   destroys at each reboot, and the chip log these charts are drawn from.
+
+   The stock links are left in place until the bridge actually answers, and
+   this appends below them rather than replacing them. If the bridge is
+   unreachable the tab is exactly as it shipped, which is the right failure
+   for a page whose whole job is to hand someone a file in a bad moment.
+*/
+var RXD_LOGS_URL = RXD_BRIDGE_BASE + '/logs';
+var RXD_LOGFILE_URL = RXD_BRIDGE_BASE + '/logfile?name=';
+var RXD_LOG_MARK = 'rxd-log-table';
+
+function rxdLogSize(bytes) {
+	if (typeof bytes !== 'number' || bytes < 0) return '-';
+	if (bytes < 1024) return bytes + ' B';
+	if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+	return (bytes / (1024 * 1024)).toFixed(2) + ' MB';
+}
+
+/* Where the file is, is the one column worth having: it says whether what you
+   are about to download survives a reboot.
+
+   Three answers, not two. /var/order is jffs2 on the mtd and survives; /var/log
+   is a symlink into /var/volatile, which is tmpfs, so the four daemon logs
+   exist only in RAM until the next boot. Calling those "internal flash" was
+   wrong about precisely the thing someone reads this column to learn. */
+function rxdLogStore(source) {
+	if (source === 'card') return 'SD card';
+	if (source === 'ram') return 'RAM, until reboot';
+	return 'Internal flash';
+}
+
+function rxdLogRow(log) {
+	if (!log || !log.name) return '';
+	return '<tr>' +
+		'<td><a href="' + RXD_LOGFILE_URL +
+			encodeURIComponent(log.name) + '" download>' +
+			rxdFanEscape(log.name) + '</a></td>' +
+		'<td>' + rxdFanEscape(log.label || '') + '</td>' +
+		'<td>' + rxdLogStore(log.source) + '</td>' +
+		'<td>' + rxdLogSize(log.bytes) + '</td>' +
+		'<td>' + (rxdAboutStamp(log.modified) || '-') + '</td>' +
+		'</tr>';
+}
+
+function rxdRenderLogs(d) {
+	d = d || {};
+	var logs = d.logs || [];
+	if (!logs.length) return '';
+
+	var rows = '';
+	for (var i = 0; i < logs.length; i++) rows += rxdLogRow(logs[i]);
+	if (!rows) return '';
+
+	return '<div class="' + RXD_LOG_MARK + '">' +
+		'<h4>All logs</h4>' +
+		'<p class="rxd-about-note">' +
+		(d.card ? 'Served from the SD card where one is archived, so these go ' +
+		          'back further than the two above - which only ever come from ' +
+		          'internal flash.'
+		        : 'No SD card is mounted, so these come from internal flash and ' +
+		          'cover this boot only.') +
+		'</p>' +
+		'<table><tbody>' +
+		'<tr><th>File</th><th>What it is</th><th>Stored on</th>' +
+		'<th>Size</th><th>Updated</th></tr>' +
+		rows + '</tbody></table></div>';
+}
+
+function rxdFillLogDownloads() {
+	var pane = $('.log_main #tab .downlogfile');
+	// Wait for the stock AJAX to paint its two links: appending first would
+	// only be wiped by the .html() that replaces the pane.
+	if (!pane.length || !pane.children().length) return;
+	if (pane.find('.' + RXD_LOG_MARK).length) return;
+	if (RXD.logsPending) return;
+
+	RXD.logsPending = true;
+	$.ajax({ url: RXD_LOGS_URL, type: 'GET', dataType: 'json', timeout: 20000 })
+		.done(function(d) {
+			var html = rxdRenderLogs(d);
+			var where = $('.log_main #tab .downlogfile');
+			if (html && where.length && !where.find('.' + RXD_LOG_MARK).length) {
+				where.append(html);
+			}
+		})
+		.always(function() { RXD.logsPending = false; });
+}
+
+function rxdWatchForLogDownloads() {
+	rxdFillLogDownloads();
+	if (typeof MutationObserver === 'undefined') return;
+	// The tab is painted by an AJAX callback, and switching away and back
+	// repaints it, so there is nothing to bind to once and no event to hook.
+	//
+	// Debounced because this watches the whole document and Highcharts mutates
+	// the DOM continuously while it animates: without this, every frame of
+	// every chart costs a selector lookup on a page that is not even open.
+	var observer = new MutationObserver(function() {
+		if (RXD.logTimer) return;
+		RXD.logTimer = setTimeout(function() {
+			RXD.logTimer = null;
+			rxdFillLogDownloads();
+		}, 200);
+	});
+	observer.observe(document.body, { childList: true, subtree: true });
+	RXD.logObserver = observer;
+}
+
 function rxdInit() {
 	if (RXD.initialized) return;
 	RXD.initialized = true;
@@ -2787,6 +2901,7 @@ function rxdInit() {
 	rxdBrandSidebar();
 	rxdSetupMobileNav();
 	rxdWatchForFanControl();
+	rxdWatchForLogDownloads();
 	rxdAddOcNav();
 	// Must follow rxdAddOcNav: both items are inserted relative to it.
 	rxdAddExtraNav();

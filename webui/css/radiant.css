@@ -1337,3 +1337,58 @@ td { color: var(--text-primary) !important; }
 /* The first section heading sits directly under the card title, which already
    carries its own bottom margin - so it does not need the full 22px above it. */
 .rxd-oc-card h4:first-of-type { margin-top: 4px; }
+
+/* ----------------------------------------------------- the log download table
+
+   Five columns of data, a different shape from the About page's two-column
+   label/value list, so it gets its own rules rather than borrowing ones
+   written for that job. Borrowing is what went wrong first time round: the
+   markup asked for a class that did not exist, so the table rendered with no
+   cell padding at all and ran "Stored on" into "Size". */
+.rxd-log-table { margin-top: 18px; }
+
+.rxd-log-table table {
+	width: 100%;
+	border-collapse: collapse;
+}
+
+.rxd-log-table th,
+.rxd-log-table td {
+	text-align: left;
+	vertical-align: top;
+	padding: 7px 20px 7px 0;
+	border-bottom: 1px solid var(--border);
+	font-weight: 400;
+	white-space: nowrap;
+}
+
+.rxd-log-table tr:first-child th {
+	color: var(--text-secondary);
+	font-size: 12px;
+	letter-spacing: .04em;
+	text-transform: uppercase;
+}
+
+/* The description is the only column allowed to wrap, so it absorbs the spare
+   width and the four short columns keep their shape. */
+.rxd-log-table td:nth-child(2) {
+	white-space: normal;
+	width: 100%;
+	color: var(--text-secondary);
+}
+
+/* Sizes line up as numbers rather than as text. */
+.rxd-log-table td:nth-child(4) { font-variant-numeric: tabular-nums; }
+
+.rxd-log-table th:last-child,
+.rxd-log-table td:last-child { padding-right: 0; }
+.rxd-log-table td:last-child { color: var(--text-secondary); }
+
+.rxd-log-table a { color: var(--accent); text-decoration: none; }
+.rxd-log-table a:hover { text-decoration: underline; }
+
+/* On a phone the descriptions are what has to give, not the filenames. */
+@media (max-width: 700px) {
+	.rxd-log-table th:nth-child(2),
+	.rxd-log-table td:nth-child(2) { display: none; }
+}
