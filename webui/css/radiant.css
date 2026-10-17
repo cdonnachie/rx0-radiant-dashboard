@@ -1285,3 +1285,55 @@ td { color: var(--text-primary) !important; }
 /* The three added Hash Board columns. Numbers with units, so they must not
    wrap mid-value when the table is tight. */
 .right .content5 .boardcss .rxd-board-extra { white-space: nowrap; }
+
+/* --- About page -----------------------------------------------------------
+   A label/value table rather than cards or charts: everything here is either
+   a fact that does not change or a value that should never change, and the
+   point of the page is to be scanned, not watched. */
+.rxd-about {
+	width: 100%;
+	border-collapse: collapse;
+	margin: 0 0 18px;
+	font-size: 13px;
+}
+.rxd-about th,
+.rxd-about td {
+	text-align: left;
+	vertical-align: top;
+	padding: 6px 10px 6px 0;
+	border-bottom: 1px solid var(--border);
+	font-weight: 400;
+}
+/* The label column sizes to its content and stops wrapping mid-phrase; the
+   value column takes the rest. */
+.rxd-about th {
+	color: var(--text-secondary);
+	white-space: nowrap;
+	width: 1%;
+	padding-right: 18px;
+}
+.rxd-about td { color: var(--text-primary); }
+
+.rxd-oc-card h4 {
+	margin: 22px 0 10px;
+	font-size: 14px;
+	font-weight: 600;
+	color: var(--text-primary);
+}
+
+/* Provenance and units, deliberately quieter than the value they annotate. */
+.rxd-about-note { color: var(--text-secondary); font-size: 12px; }
+.rxd-about-ok   { color: var(--ok); font-size: 12px; }
+/* --bad, not --warn: a rail outside its datasheet band is a fault, not a
+   caution, and should not look like the fan merely running warm. */
+.rxd-about-bad  { color: var(--bad); font-size: 12px; font-weight: 600; }
+.rxd-about-aside {
+	color: var(--text-secondary);
+	font-size: 12px;
+	line-height: 1.5;
+	margin: -8px 0 18px;
+}
+
+/* The first section heading sits directly under the card title, which already
+   carries its own bottom margin - so it does not need the full 22px above it. */
+.rxd-oc-card h4:first-of-type { margin-top: 4px; }

@@ -54,7 +54,7 @@ const RXD_MIN_SAMPLE_GAP_MS = Number(/RXD_MIN_SAMPLE_GAP_MS = (\d+)/.exec(src)[1
 const RXD_SNAP_MS = Number(/RXD_SNAP_MS = (\d+)/.exec(src)[1]);
 const RXD_TEMP_SENTINEL = Number(/RXD_TEMP_SENTINEL = (\d+)/.exec(src)[1]);
 const RXD = {
-    chipHistory: { timestamps: [], boards: {} },
+    chipHistory: { timestamps: [], boards: {}, soc: [] },
     history: { timestamps: [], hashrate: [], temp1: [], temp2: [], fan1: [], fan2: [] },
     maxPoints: 288
 };
@@ -76,6 +76,8 @@ eval(extract('rxdSeedHistory'));
 eval(extract('rxdRecordData'));
 eval(extract('rxdTimeLabels'));
 eval(extract('rxdTimesAreEpoch'));
+eval(extract('rxdNormaliseSoc'));
+eval(extract('rxdSocSeries'));
 eval(extract('rxdCarryChipTail'));
 eval(extract('rxdDropEmptyBoards'));
 eval(extract('rxdEmptyBoardSeries'));
@@ -94,9 +96,10 @@ const SERIES = ['tempMin','tempAvg','tempMax','voltMin','voltAvg','voltMax',
 
 // A history in the on-the-wire shape: n points every stepMs, ending at endMs.
 function hist(endMs, n, stepMs, boards, base) {
-    const h = { timestamps: [], boards: {} };
+    const h = { timestamps: [], boards: {}, soc: [] };
     (boards || ['1']).forEach(b => h.boards[b] = rxdEmptyBoardSeries());
     for (let i = n - 1; i >= 0; i--) h.timestamps.push(endMs - i * stepMs);
+    h.timestamps.forEach((t, i) => h.soc.push(55 + (i % 7)));
     h.timestamps.forEach((t, i) => {
         Object.keys(h.boards).forEach(b => {
             SERIES.forEach(sk => h.boards[b][sk].push((base || 100) + i));
@@ -242,6 +245,63 @@ check('the cap still holds', RXD.chipHistory.timestamps.length, RXD.maxPoints);
 check('and it drops the oldest, keeping the newest',
     RXD.chipHistory.timestamps[RXD.maxPoints - 1], NOW + (RXD.maxPoints + 19) * MIN);
 check('series still aligned at the cap', aligned(RXD.chipHistory), true);
+
+console.log('');
+console.log('the SoC die temperature: a series that may be missing or short');
+// Three real sources can leave it absent: a bridge older than the column, a
+// localStorage blob saved before it existed, and an XADC that would not read.
+let noSoc = { timestamps: [NOW, NOW + MIN, NOW + 2 * MIN], boards: {} };
+rxdNormaliseSoc(noSoc);
+check('a payload with no soc at all gets one',
+    noSoc.soc, [null, null, null]);
+let shortSoc = { timestamps: [NOW, NOW + MIN, NOW + 2 * MIN], soc: [60.4], boards: {} };
+rxdNormaliseSoc(shortSoc);
+check('a short soc is padded, not left misaligned',
+    shortSoc.soc, [60.4, null, null]);
+let longSoc = { timestamps: [NOW], soc: [60.4, 61.1, 62.0], boards: {} };
+rxdNormaliseSoc(longSoc);
+check('an over-long one is trimmed to the timestamps', longSoc.soc, [60.4]);
+check('a missing payload does not throw',
+    (() => { rxdNormaliseSoc(undefined); return 'ok'; })(), 'ok');
+
+// What the chart actually plots.
+check('the series pads to the timestamps',
+    rxdSocSeries({ timestamps: [1, 2, 3], soc: [60.4] }), [60.4, null, null]);
+check('nulls stay nulls - a gap is not 0 C',
+    rxdSocSeries({ timestamps: [1, 2], soc: [null, 61] }), [null, 61]);
+check('a non-number is a gap too, not NaN on the axis',
+    rxdSocSeries({ timestamps: [1, 2], soc: ['-', undefined] }), [null, null]);
+check('no history at all is an empty series',
+    rxdSocSeries({ timestamps: [], soc: [] }), []);
+
+// Live recording, and the cap.
+RXD.chipHistory = { timestamps: [], boards: {}, soc: [] };
+at(NOW, () => rxdRecordChipData({ soc: 60.41, boards: [sample.boards[0]] }));
+check('a live reading is recorded', RXD.chipHistory.soc, [60.41]);
+at(NOW + MIN, () => rxdRecordChipData({ boards: [sample.boards[0]] }));
+check('a bridge that sends no soc leaves a gap, not a zero',
+    RXD.chipHistory.soc, [60.41, null]);
+check('and the arrays stay the same length',
+    RXD.chipHistory.soc.length, RXD.chipHistory.timestamps.length);
+
+RXD.chipHistory = { timestamps: [], boards: {}, soc: [] };
+for (let i = 0; i <= RXD.maxPoints + 5; i++) {
+    at(NOW + i * MIN, () => rxdRecordChipData({ soc: 50 + (i % 10), boards: [sample.boards[0]] }));
+}
+check('soc is capped with the timestamps',
+    RXD.chipHistory.soc.length, RXD.maxPoints);
+check('and still aligned at the cap',
+    RXD.chipHistory.soc.length, RXD.chipHistory.timestamps.length);
+
+// Carried across a re-seed, like every other series.
+const seeded = hist(NOW + 10 * MIN, 5, 5 * MIN, ['1']);
+const localTail = hist(NOW + 12 * MIN, 7, 5 * MIN, ['1']);
+localTail.soc[localTail.soc.length - 1] = 71.5;
+rxdCarryChipTail(localTail, seeded);
+check('the carried tail brings its soc with it',
+    seeded.soc[seeded.soc.length - 1], 71.5);
+check('soc still matches timestamps after the carry',
+    seeded.soc.length, seeded.timestamps.length);
 
 console.log('');
 console.log('the BOARD history: the seed stores instants too');

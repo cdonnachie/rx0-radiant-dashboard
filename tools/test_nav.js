@@ -1,4 +1,4 @@
-// Check rxdNavSelect: exactly one of our three nav items may be current.
+// Check rxdNavSelect: exactly one of our nav items may be current.
 //
 // The reported bug was that going Swarm -> Fan left BOTH highlighted, because
 // the old code cleared the highlight pairwise and Fan's handler only knew
@@ -25,7 +25,9 @@ function extract(name) {
     return src.slice(start, i + 1);
 }
 
-const ITEMS = ['rxdOcMenu', 'rxdFanMenu', 'rxdSwarmMenu'];
+// Every page of ours. Adding one here covers it in the all-orderings sweep
+// below as well as in the RXD_NAV_ITEMS completeness check.
+const ITEMS = ['rxdOcMenu', 'rxdFanMenu', 'rxdSwarmMenu', 'rxdAboutMenu'];
 let state = {};
 function reset() { ITEMS.forEach(k => { state[k] = new Set(); }); }
 reset();
@@ -53,7 +55,7 @@ function check(label, ok, detail) {
     if (!ok) fail++;
 }
 
-// The selector constant must name all three, or the clear silently misses one.
+// The selector constant must name them all, or the clear silently misses one.
 ITEMS.forEach(n => check('RXD_NAV_ITEMS covers ' + n,
                          RXD_NAV_ITEMS.indexOf(n) >= 0));
 

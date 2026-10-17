@@ -8,7 +8,11 @@ var RXD = {
 	// holding its own min/avg/max series aligned to the shared timestamps.
 	chipHistory: {
 		timestamps: [],
-		boards: {}
+		boards: {},
+		// The SoC die temperature, flat beside timestamps rather than under a
+		// board, because it belongs to the machine. Null where a sample
+		// predates the bridge column or the XADC could not be read.
+		soc: []
 	},
 	maxPoints: 288, // 24 hours at 5-min intervals
 	charts: {},
@@ -56,6 +60,7 @@ var RXD_PERF_URL = RXD_BRIDGE_BASE + '/performance';
 var RXD_SWARM_URL = RXD_BRIDGE_BASE + '/swarm';
 var RXD_PEERS_URL = RXD_BRIDGE_BASE + '/peers';
 var RXD_SCAN_URL = RXD_BRIDGE_BASE + '/scan';
+var RXD_ABOUT_URL = RXD_BRIDGE_BASE + '/about';
 
 // The bridge reads hashrate, board temps and fan RPM out of three different
 // log lines, written seconds apart, so no two of them share a timestamp. The
@@ -1315,6 +1320,8 @@ function rxdLoadChipHistory() {
 			var parsed = JSON.parse(saved);
 			if (parsed && parsed.timestamps && parsed.timestamps.length > 0 && parsed.boards) {
 				rxdDropEmptyBoards(parsed);
+				// A blob saved before the SoC series existed has no `soc`.
+				rxdNormaliseSoc(parsed);
 				RXD.chipHistory = parsed;
 			}
 		}
@@ -1346,6 +1353,7 @@ function rxdFetchChipHistory() {
 			if (!h || !h.timestamps || h.timestamps.length === 0 || !h.boards) return;
 
 			rxdDropEmptyBoards(h);
+			rxdNormaliseSoc(h);
 			rxdCarryChipTail(RXD.chipHistory, h);
 			RXD.chipHistory = h;
 			rxdSaveChipHistory();
@@ -1374,6 +1382,8 @@ function rxdCarryChipTail(local, h) {
 	for (var i = 0; i < local.timestamps.length; i++) {
 		if (local.timestamps[i] <= last) continue;
 		h.timestamps.push(local.timestamps[i]);
+		var carried = local.soc ? local.soc[i] : null;
+		h.soc.push(typeof carried === 'number' ? carried : null);
 		keys.forEach(function(key) {
 			var from = local.boards[key];
 			var into = h.boards[key];
@@ -1400,6 +1410,20 @@ function rxdDropEmptyBoards(h) {
 		});
 		if (!hasData) delete h.boards[key];
 	});
+}
+
+/* Make `soc` exist and line up, whatever arrived.
+ *
+ * Three sources can be short or silent: a bridge older than the column sends
+ * no `soc` at all, a saved _v3 blob from before this was added has none, and
+ * the server may thin its arrays. Padding with null rather than bumping the
+ * storage key is deliberate - an added optional series is no reason to throw
+ * away a day of chip history. */
+function rxdNormaliseSoc(h) {
+	if (!h || !h.timestamps) return;
+	if (!h.soc) h.soc = [];
+	while (h.soc.length < h.timestamps.length) h.soc.push(null);
+	if (h.soc.length > h.timestamps.length) h.soc.length = h.timestamps.length;
 }
 
 function rxdEmptyBoardSeries() {
@@ -1430,6 +1454,10 @@ function rxdRecordChipData(d) {
 	// shared timestamps array.
 	var priorLen = h.timestamps.length;
 	h.timestamps.push(ts);
+	// /chipinfo reads the XADC live, so this does not wait on the bridge's
+	// 5-minute sampler. A bridge older than the column sends nothing: gap.
+	rxdNormaliseSoc(h);
+	h.soc[priorLen] = typeof d.soc === 'number' ? d.soc : null;
 
 	d.boards.forEach(function(b) {
 		var key = String(b.board);
@@ -1447,6 +1475,7 @@ function rxdRecordChipData(d) {
 
 	while (h.timestamps.length > RXD.maxPoints) {
 		h.timestamps.shift();
+		h.soc.shift();
 		for (var bk in h.boards) {
 			for (var sk in h.boards[bk]) h.boards[bk][sk].shift();
 		}
@@ -1520,6 +1549,36 @@ function rxdChipSeries(board, statKey, suffix) {
 	});
 }
 
+/* The SoC die temperature as a chart series, padded to the timestamps.
+ *
+ * Nulls are gaps, not zeroes: a sample from before the bridge recorded this
+ * column has no value, and neither does one where the XADC could not be read.
+ * Plotting either as 0 C would draw a cliff, the same mistake rxdGap exists
+ * to prevent for the fan tachs. */
+function rxdSocSeries(h) {
+	var soc = (h && h.soc) || [];
+	var n = (h && h.timestamps) ? h.timestamps.length : 0;
+	var out = [];
+	for (var i = 0; i < n; i++) {
+		out.push(typeof soc[i] === 'number' ? soc[i] : null);
+	}
+	return out;
+}
+
+/* Deliberately not styled like a board series. It is a reference line - thin,
+   grey and dashed - because it is not a hash-board reading and should not be
+   read as one. The SoC sits on the control board, outside the hash board's
+   airflow, so it is the closest thing this machine has to an intake-air
+   measurement: the context that makes a chip temperature from Tuesday
+   comparable with one from Friday. Both PCB sensors are heated BY the chips,
+   so neither can do that job. */
+var RXD_SOC_STYLE = {
+	name: 'SoC die (ambient proxy)',
+	color: '#8A8A96',
+	dashStyle: 'ShortDash',
+	lineWidth: 1
+};
+
 function rxdChipChart(container, title, yTitle, statKey, suffix) {
 	var h = RXD.chipHistory;
 	var boardNums = rxdChipBoardNums();
@@ -1532,6 +1591,12 @@ function rxdChipChart(container, title, yTitle, statKey, suffix) {
 		series.push({ name: 'Board' + bn + ' (min)', data: rxdChipSeries(b, statKey, 'Min'), color: colors.min });
 		series.push({ name: 'Board' + bn + ' (max)', data: rxdChipSeries(b, statKey, 'Max'), color: colors.max });
 	});
+
+	// Only on the temperature chart, where it is the same unit and the
+	// comparison is the point. It goes last so it draws over the board lines.
+	if (statKey === 'temp') {
+		series.push($.extend({}, RXD_SOC_STYLE, { data: rxdSocSeries(h) }));
+	}
 
 	return rxdMakeChart(container, title, yTitle, series, null, suffix, rxdTimeLabels(h));
 }
@@ -1561,10 +1626,13 @@ function rxdUpdateChipCharts() {
 		['chipvolt',  'rxd-chipvolt-chart',  'Chip Voltage',     'Voltage', 'volt', ' mV'],
 		['chipclock', 'rxd-chipclock-chart', 'Chip Clock',       'Clock',   'pll',  ' MHz']
 	];
-	var expectedSeries = boardNums.length * 3;
-
 	defs.forEach(function(d) {
 		var key = d[0], el = d[1], statKey = d[4];
+		// Per chart, not shared: the temperature chart carries one more series
+		// than the other two. A single shared count would have made every
+		// refresh think the series list had changed and rebuild the chart from
+		// scratch, forever.
+		var expectedSeries = boardNums.length * 3 + (statKey === 'temp' ? 1 : 0);
 		if (RXD.charts[key] && RXD.charts[key].series.length === expectedSeries) {
 			RXD.charts[key].xAxis[0].setCategories(rxdTimeLabels(h), false);
 			var si = 0;
@@ -1574,6 +1642,9 @@ function rxdUpdateChipCharts() {
 				RXD.charts[key].series[si++].setData(rxdChipSeries(b, statKey, 'Min'), false);
 				RXD.charts[key].series[si++].setData(rxdChipSeries(b, statKey, 'Max'), false);
 			});
+			if (statKey === 'temp') {
+				RXD.charts[key].series[si++].setData(rxdSocSeries(h), false);
+			}
 			RXD.charts[key].redraw();
 		} else {
 			// No chart yet, or the board count changed since it was built
@@ -1872,7 +1943,9 @@ function rxdOcApply() {
    Swarm, so two pages showed as current at once. One list, cleared in full
    before the current item is set, and the clear happens inside the page
    function rather than in a click handler so it cannot race the add. */
-var RXD_NAV_ITEMS = '.left .rxdOcMenu, .left .rxdFanMenu, .left .rxdSwarmMenu';
+// Keep this on ONE line: test_nav.js lifts it with a line-anchored regex, so
+// splitting it across lines evals a dangling '+' and crashes the suite.
+var RXD_NAV_ITEMS = '.left .rxdOcMenu, .left .rxdFanMenu, .left .rxdSwarmMenu, .left .rxdAboutMenu';
 
 function rxdNavSelect(cls) {
 	$(RXD_NAV_ITEMS).removeClass('menucssStatus');
@@ -2237,6 +2310,203 @@ function rxdSwarmMenu() {
 	rxdSwarmLoad();
 }
 
+/* --- About ----------------------------------------------------------------
+
+   What the charts are the wrong shape for: facts that do not move, and values
+   that should never move. The Zynq's internal rails are the clearest case -
+   ten consecutive samples of VCCINT spanned 10 mV of pure converter noise, and
+   nothing the operator controls shifts them, so a trace would plot the ADC and
+   train you to ignore the dashboard. On a page you visit when something is
+   odd, the same numbers answer a real question: is the control board healthy,
+   and is the XADC even referencing correctly.
+
+   It also writes down what this machine CANNOT measure. Input voltage and
+   current have now been asked about twice, and the honest answer takes
+   evidence to give - the I2C bus was scanned for an INA219/INA226 and there is
+   nothing, so wall power and J/TH are simply unavailable here. Better on the
+   page than rediscovered. */
+
+function rxdAboutRow(label, value, note) {
+	if (value === null || value === undefined || value === '') return '';
+	return '<tr><th>' + rxdFanEscape(label) + '</th><td>' + rxdFanEscape(String(value)) +
+		(note ? ' <span class="rxd-about-note">' + rxdFanEscape(note) + '</span>' : '') +
+		'</td></tr>';
+}
+
+function rxdAboutUptime(seconds) {
+	if (typeof seconds !== 'number') return null;
+	var d = Math.floor(seconds / 86400);
+	var h = Math.floor((seconds % 86400) / 3600);
+	var m = Math.floor((seconds % 3600) / 60);
+	if (d) return d + 'd ' + h + 'h ' + m + 'm';
+	if (h) return h + 'h ' + m + 'm';
+	return m + 'm';
+}
+
+/* An instant from the bridge, in the VIEWER's clock and labelled as such.
+ *
+ * The miner runs on UTC, so the unlabelled string this used to show was four
+ * hours off for the person reading it - the same confusion that had the chip
+ * charts sitting beside the board charts on a different timescale. The wire
+ * carries epoch ms and this formats it, which is also why the label can
+ * honestly say "local".
+ *
+ * A bridge older than that change still sends a preformatted string; it passes
+ * through untouched and gets labelled as the miner's clock instead, because
+ * that is what it is. */
+function rxdAboutStamp(v) {
+	if (typeof v !== 'number') return v || null;
+	var d = new Date(v);
+	var pad = function(n) { return ('0' + n).slice(-2); };
+	return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()) +
+		' ' + pad(d.getHours()) + ':' + pad(d.getMinutes());
+}
+
+/* The card slot, in the three states that are actually distinguishable.
+ *
+ * The middle one is why this gets a row at all: a card can be in the slot and
+ * still unusable. This kernel has ext2/3/4, vfat and msdos but no exFAT or
+ * NTFS, so a 64 GB card as it ships is detected, sized, and mounts nowhere -
+ * and "empty" would send you hunting a hardware fault that is not there. */
+function rxdAboutSdRow(sd) {
+	sd = sd || {};
+	if (sd.mount) {
+		return rxdAboutRow('SD card',
+			(sd.card ? sd.card + ' — ' : '') + (rxdAboutStore(sd) || 'mounted'),
+			sd.mount);
+	}
+	if (sd.card) {
+		return rxdAboutRow('SD card', sd.card + ' — not mountable',
+			'needs FAT32 or ext4; this kernel has no exFAT or NTFS');
+	}
+	return rxdAboutRow('SD card', 'empty');
+}
+
+/* The bridge reports megabytes because that is the right grain for the two
+   NAND and tmpfs figures - 110 and 122. A 32 GB card in the same unit reads
+   "31983.9 MB free of 31984.0 MB", which is noise pretending to be precision,
+   so anything over a gigabyte is shown as one. */
+function rxdAboutStore(info) {
+	if (!info || typeof info.total !== 'number') return null;
+	var unit = function(mb) {
+		return info.total >= 1024 ? (mb / 1024).toFixed(1) + ' GB'
+		                          : mb + ' MB';
+	};
+	return unit(info.free) + ' free of ' + unit(info.total);
+}
+
+function rxdRenderAbout(d) {
+	d = d || {};
+	var out = '<div class="rxd-oc"><div class="rxd-oc-card"><h3>About this miner</h3>';
+
+	// Two tables, because they are two kinds of claim. The hardware rows were
+	// read off photographs; everything in System is read live from the machine.
+	// They used to share one table, which left the provenance note below
+	// describing "the rows above" when half of those rows were live readings.
+	if ((d.hardware || []).length) {
+		out += '<h4>Hardware</h4><table class="rxd-about">';
+		d.hardware.forEach(function(row) {
+			out += rxdAboutRow(row.label, row.value, row.source);
+		});
+		out += '</table>';
+		out += '<p class="rxd-about-aside">Read off photographs of the board, not ' +
+			'reported by the miner — so these are the rows to distrust if this ' +
+			'ever runs on another model. Everything else on this page is read live.</p>';
+	}
+
+	out += '<h4>System</h4><table class="rxd-about">';
+	out += rxdAboutRow('Model', d.model);
+	out += rxdAboutRow('Firmware', d.firmware);
+	out += rxdAboutRow('Kernel', d.kernel);
+	out += rxdAboutRow('Uptime', rxdAboutUptime(d.uptimeSeconds));
+	out += rxdAboutRow('SSH', d.sshPort ? 'port ' + d.sshPort : null);
+	// Prefer the instant; fall back to a legacy bridge's own rendering, and say
+	// which clock the reader is looking at either way.
+	var installed = d.bridgeInstalledMs !== undefined ? d.bridgeInstalledMs
+		: d.bridgeInstalled;
+	out += rxdAboutRow('Bridge installed', rxdAboutStamp(installed),
+		typeof installed === 'number' ? 'local time' : 'miner clock (UTC)');
+	out += rxdAboutRow('Overclock page',
+		d.overclockEnabled === undefined ? null :
+			(d.overclockEnabled ? 'enabled' : 'disabled in this build'));
+	out += '</table>';
+
+	(d.boards || []).forEach(function(b) {
+		out += '<h4>Hash board ' + rxdFanEscape(String(b.board)) + '</h4><table class="rxd-about">';
+		out += rxdAboutRow('Chips', b.chipcount);
+		out += rxdAboutRow('Clock', b.pll ? b.pll + ' MHz' : null, 'EEPROM setting');
+		// Labelled a setting on purpose: it is EEPROM bytes 0-1, not a reading.
+		out += rxdAboutRow('Board voltage', b.volts ? b.volts + ' V' : null,
+			'EEPROM setting, not measured');
+		out += '</table>';
+	});
+
+	var fan = d.fan || {};
+	if (fan.mode) {
+		out += '<h4>Cooling</h4><table class="rxd-about">';
+		out += rxdAboutRow('Mode', fan.mode);
+		if (fan.mode === 'target') {
+			out += rxdAboutRow('Target chip temp', fan.target ? fan.target + ' °C' : null);
+			out += rxdAboutRow('Fan range', (fan.minfan || '?') + '-' + (fan.maxfan || '?') + '%');
+		} else {
+			out += rxdAboutRow('Fan ratio', fan.ratio ? fan.ratio + '%' : null);
+		}
+		out += '</table>';
+	}
+
+	out += '<h4>Controller</h4><table class="rxd-about">';
+	out += rxdAboutRow('SoC die temperature',
+		typeof d.socTemp === 'number' ? d.socTemp + ' °C' : null,
+		'averaged; the ambient trace on the chip chart');
+	(d.rails || []).forEach(function(r) {
+		out += '<tr><th>' + rxdFanEscape(r.label) + '</th><td>' +
+			r.volts.toFixed(3) + ' V ' +
+			'<span class="' + (r.ok ? 'rxd-about-ok' : 'rxd-about-bad') + '">' +
+			(r.ok ? 'in band' : 'OUT OF BAND') + '</span> ' +
+			'<span class="rxd-about-note">nominal ' + r.nominal.toFixed(2) +
+			' ±' + (r.band * 1000).toFixed(0) + ' mV</span></td></tr>';
+	});
+	out += '</table>';
+	out += '<p class="rxd-about-aside">VREFP is the converter’s own reference, ' +
+		'so it is a self-check on every XADC reading here — including the die ' +
+		'temperature. If it drifts off 1.25 V, treat the rest as suspect.</p>';
+
+	var st = d.storage || {};
+	var sd = d.sd || {};
+	if (st.root || st.volatile || sd.card || sd.mount) {
+		out += '<h4>Storage</h4><table class="rxd-about">';
+		out += rxdAboutRow('/ (jffs2, survives updates)', rxdAboutStore(st.root));
+		out += rxdAboutRow('/var/volatile (tmpfs)', rxdAboutStore(st.volatile),
+			'a firmware upload needs ~40 MB of this free');
+		out += rxdAboutSdRow(sd);
+		// The operationally useful part: not just whether a card is there, but
+		// whether history is actually going to it. NAND is capped at 1 MB -
+		// about two weeks - because it is flash with finite write endurance.
+		out += rxdAboutRow('Chip history', sd.log,
+			sd.mount ? 'on the card, uncapped' : 'on NAND, capped at ~2 weeks');
+		out += '</table>';
+	}
+
+	out += '</div></div>';
+	$('.right .srcollcss').html(out);
+}
+
+function rxdAboutMenu() {
+	rxdNavSelect('rxdAboutMenu');
+	$('.right .srcollcss').html('<div class="rxd-oc"><div class="rxd-oc-card">' +
+		'<h3>About this miner</h3><p class="rxd-oc-busy">Reading the miner...</p>' +
+		'</div></div>');
+
+	$.ajax({ url: RXD_ABOUT_URL, type: 'GET', dataType: 'json', timeout: 15000 })
+		.done(function(d) { rxdRenderAbout(d); if (window.loaded) loaded(); })
+		.fail(function() {
+			$('.right .srcollcss').html('<div class="rxd-oc"><div class="rxd-oc-card">' +
+				'<h3>About this miner</h3><p class="rxd-oc-error">Could not reach the ' +
+				'miner bridge at ' + RXD_BRIDGE_BASE + '.</p></div></div>');
+			if (window.loaded) loaded();
+		});
+}
+
 function rxdAddExtraNav() {
 	var list = $('.left ul');
 	if (list.length === 0) return;
@@ -2255,9 +2525,22 @@ function rxdAddExtraNav() {
 		list.find('.rxdFanMenu').after(swarm);
 		swarm.on('click', function() { if (window.menu) menu(); rxdSwarmMenu(); });
 	}
+	if (list.find('.rxdAboutMenu').length === 0) {
+		// The END of the whole menu, not just the end of ours. Fan and Swarm
+		// belong beside Overclock because they are things you go and do; About
+		// is reference material and reads as misplaced wedged between the
+		// miner's own pages.
+		//
+		// Appended to the list that actually holds our anchor, not to
+		// $('.left ul') - that selector can match more than one <ul>, and
+		// jQuery's append would then put a CLONE in each of them.
+		var about = $('<li class="rxdAboutMenu menucss"><span>About</span></li>');
+		anchor.parent().append(about);
+		about.on('click', function() { if (window.menu) menu(); rxdAboutMenu(); });
+	}
 
-	// Stock pages clear all three of ours; our own pages set themselves through
-	// rxdNavSelect, which clears the other two first. Nothing pairwise.
+	// Stock pages clear all of ours; our own pages set themselves through
+	// rxdNavSelect, which clears the others first. Nothing pairwise.
 	$('.left .userMenu, .left .fpgaMenu, .left .ipMenu, .left .sysMenu, ' +
 	  '.left .firMenu, .left .logMenu')
 		.on('click', function() { rxdNavSelect(null); });

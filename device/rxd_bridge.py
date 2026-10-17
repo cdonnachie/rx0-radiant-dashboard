@@ -99,6 +99,90 @@ CHIP_LOG = '/var/order/rxd_chips.log'
 CHIP_SAMPLE_SECONDS = 300
 CHIP_LOG_MAX = 1024 * 1024      # ~2 weeks; halved in place when it trips
 
+# --- an SD card, when one is in the slot -------------------------------------
+#
+# The cap above exists because /var/order is 110 MB of NAND with finite write
+# endurance, so chip history is held to about two weeks. A card lifts that
+# entirely: 60 bytes a sample every five minutes is a few MB a year.
+#
+# Nothing needs mounting. /etc/udev/rules.d/automount.rules runs
+# /etc/udev/scripts/mount.sh on every block add, remove and media change, so a
+# partition the kernel understands appears at /run/media/<device> read-write,
+# group `disk`, with no help from this bridge. The kernel has ext2/3/4, vfat
+# and msdos built in - NOT exfat or ntfs, which is why a stock 64 GB card must
+# be reformatted before it is any use here.
+SD_MEDIA = '/run/media'
+SD_LOG_NAME = 'rxd_chips.log'
+
+
+def _is_mount(path):
+    """Its own function so the tests can replace it; see sd_log_dir."""
+    return os.path.ismount(path)
+
+
+def sd_log_dir():
+    """A writable, mounted SD partition to log to, or None.
+
+    The mountpoint test is the point of this, not a nicety. /run/media lives
+    on /run, which is tmpfs - so if a card is pulled and the automounter
+    leaves its directory behind, a path check alone would cheerfully "write to
+    the card" and quietly fill RAM instead. Writing into the same 122 MB tmpfs
+    that the firmware upgrade runs inside is precisely the failure this must
+    not cause.
+    """
+    try:
+        names = sorted(os.listdir(SD_MEDIA))
+    except (IOError, OSError):
+        return None
+    for name in names:
+        if not name.startswith('mmcblk'):
+            continue
+        path = os.path.join(SD_MEDIA, name)
+        # access() honours a read-only mount, so this also covers a card with
+        # its lock tab set, or one the kernel remounted ro after an error.
+        if _is_mount(path) and os.access(path, os.W_OK):
+            return path
+    return None
+
+
+def chip_log_target():
+    """Where a new sample goes: the card if there is one, else NAND."""
+    sd = sd_log_dir()
+    return os.path.join(sd, SD_LOG_NAME) if sd else CHIP_LOG
+
+
+def chip_log_sources():
+    """Every log history should be read from, NAND first.
+
+    Both, deliberately. NAND holds the samples taken before a card went in and
+    the card holds everything since, so reading either alone would blank a day
+    of charts - once when the card is inserted, and again if it is removed.
+    """
+    paths = [CHIP_LOG]
+    sd = sd_log_dir()
+    if sd:
+        paths.append(os.path.join(sd, SD_LOG_NAME))
+    return [p for p in paths if os.path.exists(p)]
+
+# --- the SoC die temperature -------------------------------------------------
+#
+# /dev/iio:device0 is the Zynq XADC, which the stock firmware never reads.
+# in_temp0 is the SoC's own die temperature, and it is worth having for a
+# reason none of the existing sensors cover: the clock ladder has never had an
+# ambient control. PCB temp2 was dismissed for sitting at a flat 48 C, and both
+# PCB sensors are heated BY the hash chips, so neither tells you what the air
+# coming into the machine is doing. The SoC is on the control board and is not
+# in that airflow path, so its die temperature tracks intake air plus a fairly
+# constant self-heating offset - a usable ambient proxy, which is what a soak
+# comparison across days actually needs.
+#
+# It also costs nothing. A sysfs read, no I2C, so none of the collision risk
+# that makes polling the 0x48/0x49 sensors a real (if small) hazard while the
+# miner is running. The XADC's other channels are the Zynq's internal rails
+# (VCCINT and friends) and are deliberately not exposed here - they were all
+# in spec and they say nothing about mining.
+SOC_IIO = '/sys/bus/iio/devices/iio:device0'
+
 # --- Overclock, the only thing here that writes ------------------------------
 #
 # Everything else in this bridge is read-only by design. This one endpoint is
@@ -374,6 +458,9 @@ def summarise(raw, profiles):
         # volts -> millivolts, to match how the brand UI shows them
         'voltage': stat(active, 'voltage', 1000.0),
         'pll': stat(active, 'pll'),
+        # Live, so the dashboard has a value on the first refresh instead of
+        # waiting for the 5-minute sampler. None when the XADC is unreadable.
+        'soc': soc_temp(),
         'boards': boards,
         'chips': [
             {'no': c.get('no'), 'temp': c.get('temp'),
@@ -559,21 +646,149 @@ def _int_arg(query, name, default, low, high):
     return max(low, min(high, value))
 
 
+# The XADC's other channels, for the About page rather than a chart. Order is
+# the order they are worth reading in; `nominal` is the Zynq-7000 datasheet
+# value and `band` the tolerance to judge it against.
+#
+# Charting these would be a mistake and the measurement says why: ten
+# consecutive samples of VCCINT spanned 10 mV and VCCO_DDR 54 mV, which is
+# converter noise rather than anything the miner did. They are regulated
+# control-board rails - no clock, fan or hashrate setting moves them - so a
+# trace would plot the ADC, and a chart that never moves teaches you to ignore
+# the dashboard. They belong on a page you visit when something is odd.
+SOC_RAILS = [
+    ('vccint',   'in_voltage0_vccint_raw',   'VCCINT',   1.00, 0.05),
+    ('vccaux',   'in_voltage1_vccaux_raw',   'VCCAUX',   1.80, 0.05),
+    ('vccbram',  'in_voltage2_vccbram_raw',  'VCCBRAM',  1.00, 0.05),
+    ('vccpint',  'in_voltage3_vccpint_raw',  'VCCPINT',  1.00, 0.05),
+    ('vccpaux',  'in_voltage4_vccpaux_raw',  'VCCPAUX',  1.80, 0.05),
+    ('vccoddr',  'in_voltage5_vccoddr_raw',  'VCCO_DDR', 1.50, 0.05),
+    ('vrefp',    'in_voltage6_vrefp_raw',    'VREFP',    1.25, 0.02),
+    ('vrefn',    'in_voltage7_vrefn_raw',    'VREFN',    0.00, 0.02),
+]
+
+
+def soc_rails():
+    """The XADC's voltage channels, averaged, with an in-band verdict each.
+
+    VREFP is the interesting one despite looking like filler: it is the
+    converter's own reference, so it is a self-check on every other number the
+    XADC gives us - including the die temperature on the chip chart. If VREFP
+    drifts off 1.25 V, that temperature is suspect too.
+
+    Averaged for the same reason as soc_temp: a single read carries about 1% of
+    noise, which is the whole observed spread on most of these rails.
+    """
+    def raw(name):
+        handle = open(os.path.join(SOC_IIO, name))
+        try:
+            return float(handle.read().strip())
+        finally:
+            handle.close()
+
+    out = []
+    try:
+        scale = raw('in_voltage0_vccint_scale')
+    except (IOError, OSError, ValueError):
+        return out
+
+    for key, node, label, nominal, band in SOC_RAILS:
+        try:
+            total = 0.0
+            for _ in range(SOC_SAMPLES):
+                total += raw(node)
+            volts = round(total / SOC_SAMPLES * scale / 1000.0, 3)
+        except (IOError, OSError, ValueError):
+            continue
+        out.append({
+            'key': key, 'label': label, 'volts': volts,
+            'nominal': nominal, 'band': band,
+            # Computed here rather than in the browser so the rule lives with
+            # the datasheet values it belongs to.
+            'ok': abs(volts - nominal) <= band + 0.0005,
+        })
+    return out
+
+
+def _soc_field(bits):
+    """The 12th log field as a number, or None.
+
+    None covers all three ways it can be absent: an 11-field line from before
+    the column existed, a '-' written when the XADC could not be read, and
+    anything unparseable. The dashboard draws a null as a gap, which is what
+    each of those is.
+    """
+    if len(bits) < 12 or bits[11] == '-':
+        return None
+    try:
+        return round(float(bits[11]), 2)
+    except ValueError:
+        return None
+
+
+# Single XADC reads are noisy. Ten consecutive samples of in_temp0_raw spanned
+# 2725-2737, which is 1.5 C of jitter on a quantity that moves by degrees per
+# hour - so one read reported to two decimals was claiming precision it did not
+# have. Averaging eight brings the noise to about a quarter of a degree, which
+# is why the result is rounded to one. Eight sysfs reads every five minutes is
+# nothing; Xilinx's own guidance is to average this converter.
+SOC_SAMPLES = 8
+
+
+def soc_temp():
+    """SoC die temperature in C, or None if the XADC is not readable.
+
+    The IIO convention is (raw + offset) * scale, where scale is in
+    millidegrees per LSB - hence the /1000. Measured 62-64 C while mining at
+    775 MHz (raw ~2730, offset -2219, scale 123.040771484).
+
+    None rather than 0 on any failure: 0 C is a plausible-looking temperature
+    and would be drawn as one, where a null is a gap. The node may genuinely be
+    absent - this is the only reading here that comes from the SoC rather than
+    the miner, and a different kernel build need not expose it.
+    """
+    def value(name):
+        handle = open(os.path.join(SOC_IIO, name))
+        try:
+            return float(handle.read().strip())
+        finally:
+            handle.close()
+
+    try:
+        # offset and scale are constants; only the raw reading is resampled.
+        offset, scale = value('in_temp0_offset'), value('in_temp0_scale')
+        total = 0.0
+        for _ in range(SOC_SAMPLES):
+            total += value('in_temp0_raw')
+        return round((total / SOC_SAMPLES + offset) * scale / 1000.0, 1)
+    except (IOError, OSError, ValueError):
+        return None
+
+
 def chip_sample_line(payload):
-    """One board per line: epoch board t_min t_avg t_max v_* p_*, space separated.
+    """One board per line: epoch board t_min t_avg t_max v_* p_* soc.
 
     Plain text rather than JSON so a line is ~60 bytes and the file can be
     trimmed by dropping whole lines without parsing it.
+
+    `soc` is the 12th field and was added later; it is the same value on every
+    line of one sample, since it belongs to the machine rather than a board.
+    It is written as '-' when the XADC could not be read, because the fields
+    are positional and an empty one would shift everything after it. Lines
+    written before this existed have 11 fields and chip_history still reads
+    them - see the length check there.
     """
     out = []
     stamp = int(time.time())
+    soc = soc_temp()
     for board in payload.get('boards', []):
         temp, volt, pll = board.get('temp', {}), board.get('voltage', {}), board.get('pll', {})
-        out.append('%d %s %s %s %s %s %s %s %s %s %s' % (
+        out.append('%d %s %s %s %s %s %s %s %s %s %s %s' % (
             stamp, board.get('board'),
             temp.get('min', 0), temp.get('avg', 0), temp.get('max', 0),
             volt.get('min', 0), volt.get('avg', 0), volt.get('max', 0),
-            pll.get('min', 0), pll.get('avg', 0), pll.get('max', 0)))
+            pll.get('min', 0), pll.get('avg', 0), pll.get('max', 0),
+            '-' if soc is None else soc))
     return '\n'.join(out)
 
 
@@ -598,11 +813,21 @@ def record_chip_sample():
     line = chip_sample_line(payload)
     if not line:
         return
+    target = chip_log_target()
     try:
-        with open(CHIP_LOG, 'a') as handle:
+        with open(target, 'a') as handle:
             handle.write(line + '\n')
     except IOError:
-        return
+        # A card pulled mid-write, or a full one. Fall back to NAND rather than
+        # drop the sample; only give up if NAND is unwritable too.
+        if target == CHIP_LOG:
+            return
+        try:
+            with open(CHIP_LOG, 'a') as handle:
+                handle.write(line + '\n')
+        except IOError:
+            return
+    # Only the NAND copy is capped. The card is not, which is the whole point.
     trim_chip_log()
 
 
@@ -617,8 +842,55 @@ def chip_sampler():
         time.sleep(CHIP_SAMPLE_SECONDS)
 
 
+def _chip_rows(cutoff):
+    """Every in-window log line from every store, de-duplicated and in order.
+
+    Split out of chip_history because reading more than one file broke an
+    assumption that was safe for years: a single append-only log is already in
+    time order, so the old reader could assign indices in the order lines
+    arrived. Two stores cannot promise that - NAND holds the older samples and
+    the card the newer ones, but a card moved between machines, or reinserted
+    after a spell out, interleaves them. So this sorts.
+
+    De-duplication is on (time, board), and where both stores hold the same
+    sample the LONGER line wins, so a 12-field row carrying the SoC
+    temperature is preferred over the 11-field row that predates it.
+    """
+    best = {}
+    for path in chip_log_sources():
+        try:
+            handle = open(path)
+        except IOError:
+            continue
+        try:
+            for raw in handle:
+                bits = raw.split()
+                # 11 fields is the original line, 12 adds the SoC die
+                # temperature. Both appear for as long as the older half takes
+                # to age out, so this accepts either rather than silently
+                # dropping every sample taken before the column existed -
+                # which is what a `!= 12` check would have done to two weeks
+                # of history.
+                if len(bits) not in (11, 12):
+                    continue
+                try:
+                    when = int(bits[0])
+                except ValueError:
+                    continue
+                if when < cutoff:
+                    continue
+                key = (when, bits[1])
+                if key not in best or len(bits) > len(best[key]):
+                    best[key] = bits
+        finally:
+            handle.close()
+
+    return [(key[0], bits) for key, bits in
+            sorted(best.items(), key=lambda kv: (kv[0][0], kv[0][1]))]
+
+
 def chip_history(hours, points):
-    """Replay CHIP_LOG into the shape the dashboard's chip charts already use.
+    """Replay the chip log(s) into the shape the dashboard's charts use.
 
     Timestamps are epoch MILLISECONDS, as /history already returns. They used
     to be 'HH:MM' strings rendered here, with the miner's clock, and the
@@ -634,57 +906,43 @@ def chip_history(hours, points):
     stamps = []
     index_of = {}
     boards = {}
-    seen = set()
+    soc = []
 
-    try:
-        handle = open(CHIP_LOG)
-    except IOError:
-        return {'timestamps': [], 'boards': {}}
+    rows = _chip_rows(cutoff)
+    if not rows:
+        return {'timestamps': [], 'boards': {}, 'soc': []}
 
-    try:
-        for raw in handle:
-            bits = raw.split()
-            if len(bits) != 11:
-                continue
-            try:
-                when = int(bits[0])
-            except ValueError:
-                continue
-            if when < cutoff:
-                continue
+    for when, bits in rows:
+        key = bits[1]
 
-            key = bits[1]
-            if (when, key) in seen:
-                continue
-            seen.add((when, key))
+        # Keyed on the sample time, so the boards written for one sample
+        # share an index. The old 'label not in stamps' did that too, but
+        # by scanning the whole list each line, and it silently merged two
+        # samples that landed in the same minute.
+        if when not in index_of:
+            index_of[when] = len(stamps)
+            stamps.append(when * 1000)
+            # Per machine, not per board, so the first line of a sample
+            # decides it and a second board's identical copy is ignored.
+            soc.append(_soc_field(bits))
+        index = index_of[when]
 
-            # Keyed on the sample time, so the boards written for one sample
-            # share an index. The old 'label not in stamps' did that too, but
-            # by scanning the whole list each line, and it silently merged two
-            # samples that landed in the same minute.
-            if when not in index_of:
-                index_of[when] = len(stamps)
-                stamps.append(when * 1000)
-            index = index_of[when]
+        series = boards.setdefault(key, {
+            'tempMin': [], 'tempAvg': [], 'tempMax': [],
+            'voltMin': [], 'voltAvg': [], 'voltMax': [],
+            'pllMin': [], 'pllAvg': [], 'pllMax': [],
+        })
+        # A board that appears late is back-filled so every series stays
+        # aligned with the shared timestamps list, same as the browser does.
+        for name in series:
+            while len(series[name]) < index:
+                series[name].append(0)
 
-            series = boards.setdefault(key, {
-                'tempMin': [], 'tempAvg': [], 'tempMax': [],
-                'voltMin': [], 'voltAvg': [], 'voltMax': [],
-                'pllMin': [], 'pllAvg': [], 'pllMax': [],
-            })
-            # A board that appears late is back-filled so every series stays
-            # aligned with the shared timestamps list, same as the browser does.
-            for name in series:
-                while len(series[name]) < index:
-                    series[name].append(0)
-
-            values = [float(b) for b in bits[2:]]
-            for name, value in zip(
-                    ['tempMin', 'tempAvg', 'tempMax', 'voltMin', 'voltAvg',
-                     'voltMax', 'pllMin', 'pllAvg', 'pllMax'], values):
-                series[name].append(round(value, 3))
-    finally:
-        handle.close()
+        values = [float(b) for b in bits[2:11]]
+        for name, value in zip(
+                ['tempMin', 'tempAvg', 'tempMax', 'voltMin', 'voltAvg',
+                 'voltMax', 'pllMin', 'pllAvg', 'pllMax'], values):
+            series[name].append(round(value, 3))
 
     for series in boards.values():
         for name in series:
@@ -694,11 +952,207 @@ def chip_history(hours, points):
     if len(stamps) > points:
         keep = _thin(range(len(stamps)), points)
         stamps = [stamps[i] for i in keep]
+        soc = [soc[i] for i in keep]
         for series in boards.values():
             for name in series:
                 series[name] = [series[name][i] for i in keep]
 
-    return {'timestamps': stamps, 'boards': boards}
+    return {'timestamps': stamps, 'boards': boards, 'soc': soc}
+
+
+UPDATE_DIR = '/var/update'
+# Stock: dropbear listens here with root logins disabled, which is why a stock
+# miner has no usable SSH at all until an account is created.
+SSH_PORT = 54188
+
+
+def _mtime_ms(path):
+    """File mtime as epoch MILLISECONDS, or None.
+
+    Not a formatted string, for the same reason /chiphistory stopped sending
+    'HH:MM': this miner's clock is UTC and the person reading the page is not,
+    so a device-rendered timestamp is off by their UTC offset with nothing on
+    screen to say so. That exact mistake put the chip charts four hours away
+    from the board charts above them.
+
+    Milliseconds because that is what every other instant on the wire here
+    uses, and a bare "epoch" that turns out to be seconds is its own bug.
+    """
+    try:
+        return int(os.path.getmtime(path) * 1000)
+    except (OSError, IOError):
+        return None
+
+
+def _read_first(path, limit=200):
+    """First line of a file, or None. Used for /proc and conf one-liners."""
+    try:
+        handle = open(path)
+        try:
+            return handle.readline(limit).strip()
+        finally:
+            handle.close()
+    except (IOError, OSError):
+        return None
+
+
+def _free_mb(path):
+    """Free megabytes on the filesystem holding `path`, or None.
+
+    Worth surfacing for two specific reasons learned the hard way. /var/volatile
+    is a 122 MB tmpfs that the whole firmware upgrade runs inside, holding the
+    package three times over - when it fills, the updater skips blocks and still
+    reports success. And / is the 110 MB jffs2 that reached 68% on stale package
+    backups. Both are invisible from the stock UI.
+    """
+    try:
+        st = os.statvfs(path)
+        return {
+            'free': round(st.f_bavail * st.f_frsize / 1048576.0, 1),
+            'total': round(st.f_blocks * st.f_frsize / 1048576.0, 1),
+        }
+    except (OSError, AttributeError):
+        return None
+
+
+# Physical facts, read off photographs of the board - NOT probed at runtime.
+# That makes them a different kind of claim from everything else here, which
+# comes from sysfs or the miner, so each row carries its own evidence and the
+# page says plainly that these were not reported by the machine. If this
+# package ever runs on another model, these are the lines that would be wrong.
+# Not in HARDWARE below: this is what the product IS, not something read off
+# the board, and mixing the two is what made the provenance note ambiguous.
+MODEL = 'IceRiver RX0 (Radiant / SHA512-256d)'
+
+HARDWARE = [
+    # The only thing actually printed on the PCB.
+    ('Control board', 'IR_HB_4X3_830_V10', 'board silkscreen'),
+    ('SoC', 'Xilinx Zynq XC7Z010 CLG400', 'chip package marking'),
+    ('Ethernet', 'IP101GA PHY, HanRun HR911105A magjack', 'chip package markings'),
+    # Counted, not read: four L1R0 inductors each with its own uPI power stage.
+    ('Chip supply', '4-phase buck', 'counted on the board'),
+    # Deliberately split from the row above, and hedged. The COUNT is solid -
+    # it comes from the EEPROM's chipcount1, which is also what the Hash board
+    # section below reports. The 4x3 ARRANGEMENT is an inference from the board
+    # name and has never been verified; if it holds, the 12 per-chip
+    # temperatures should show an airflow gradient, which nobody has checked.
+    ('Chip layout', '12 chips, probably 4x3',
+     'count from the EEPROM; grid inferred from the board name, unverified'),
+]
+
+# There is deliberately no input-voltage, input-current or power field here:
+# the board has no sensor for any of them. The bit-banged I2C bus was scanned
+# and there is nothing at 0x40-0x47 or 0x4a-0x4f (no INA219/INA226) and no
+# PMBus controller, nothing sits in front of the 4-phase buck, and the XADC's
+# external channels are not wired into the device tree. So J/TH cannot be
+# computed on this machine at all - it needs a meter at the wall.
+
+
+def sd_status():
+    """What is in the card slot, and what it is being used for.
+
+    Three states, and the middle one is why this is worth reporting at all: a
+    card can be present and still useless. The kernel has ext2/3/4, vfat and
+    msdos built in but NOT exfat or ntfs, so a 64 GB card as it ships - exFAT,
+    or NTFS if something like Rufus wrote it - is detected and enumerated and
+    mounts nowhere. Reporting "empty" in that case would send someone looking
+    for a hardware fault that is not there.
+
+    `card` is the model string, readable whenever a card is physically in the
+    slot. `mount` is set only when the kernel could actually mount it.
+    """
+    mount = sd_log_dir()
+    info = {'card': None, 'mount': mount, 'free': None, 'total': None,
+            'log': chip_log_target()}
+
+    # The card's own name, so the page can say WHICH card is in there.
+    try:
+        host = '/sys/class/mmc_host/mmc0'
+        for entry in sorted(os.listdir(host)):
+            if entry.startswith('mmc0:'):
+                info['card'] = _read_first(os.path.join(host, entry, 'name'))
+                break
+    except (IOError, OSError):
+        pass
+
+    if mount:
+        space = _free_mb(mount)
+        if space:
+            info.update(space)
+    return info
+
+
+def about():
+    """Everything the About page shows: identity, configuration, live system.
+
+    One endpoint rather than several because the page is a single read and
+    nothing here is hot - it is the opposite of the charts.
+    """
+    # _conf_read already strips comments and lowercases keys, and /setfan
+    # writes through its counterpart - so the page cannot disagree with the
+    # file about what a line means.
+    fan = _conf_read(FAN_CONF)
+
+    # The firmware version is encoded in the package filename the miner
+    # unpacks its web root from - that IS the version string, and there is no
+    # getter for it on the command port.
+    firmware = None
+    try:
+        for name in sorted(os.listdir(UPDATE_DIR)):
+            if name.endswith('_bg.bgz'):
+                firmware = name[:-len('_bg.bgz')]
+                break
+    except (IOError, OSError):
+        pass
+
+    uptime = _read_first('/proc/uptime')
+    try:
+        uptime_s = int(float(uptime.split()[0])) if uptime else None
+    except (ValueError, IndexError):
+        uptime_s = None
+
+    # A LIST of {board, chipcount, power, pll}, one per fitted board - and the
+    # only place the miner says how many boards exist at all.
+    try:
+        profiles = board_profiles()
+    except Exception:
+        profiles = []
+
+    return {
+        # Two separate claims, kept separate: `hardware` was read off
+        # photographs, everything else in the payload is live. The page
+        # puts them in different tables so its provenance note can sit
+        # under exactly the rows it describes.
+        'model': MODEL,
+        'hardware': [{'label': l, 'value': v, 'source': s} for l, v, s in HARDWARE],
+        'firmware': firmware,
+        'kernel': ' '.join(os.uname()[:3]) if hasattr(os, 'uname') else None,
+        'uptimeSeconds': uptime_s,
+        # No hand-maintained version string: the running file's own mtime
+        # answers the question that actually gets asked, which is "is the
+        # miner running the build I think it is". The browser formats it.
+        'bridgeInstalledMs': _mtime_ms(__file__),
+        'sshPort': SSH_PORT,
+        'boards': [
+            {'board': p.get('board'),
+             'chipcount': p.get('chipcount'),
+             'pll': p.get('pll'),
+             # EEPROM bytes 0-1 /100. A configured SETTING, not a measurement -
+             # the page labels it that way, because nothing on this machine
+             # reads the board's actual supply voltage.
+             'volts': p.get('power')}
+            for p in profiles
+        ],
+        'fan': fan,
+        'overclockEnabled': oc_enabled(),
+        'socTemp': soc_temp(),
+        'rails': soc_rails(),
+        'storage': {
+            'root': _free_mb('/'),
+            'volatile': _free_mb('/var/volatile'),
+        },
+        'sd': sd_status(),
+    }
 
 
 def oc_log(message):
@@ -1331,6 +1785,17 @@ class Handler(BaseHTTPRequestHandler):
             points = _int_arg(query, 'points', HISTORY_DEFAULT_POINTS, 10, HISTORY_MAX_POINTS)
             try:
                 self._send(200, chip_history(hours, points))
+            except Exception, ex:
+                self._send(503, {'error': str(ex)})
+            return
+
+        if path == '/about':
+            # Deliberately tolerant: this page is a diagnostic, so one
+            # unreadable sysfs node should blank a row rather than fail the
+            # request. Every reader inside about() already returns None or an
+            # empty list on error.
+            try:
+                self._send(200, about())
             except Exception, ex:
                 self._send(503, {'error': str(ex)})
             return
