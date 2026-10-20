@@ -1930,6 +1930,25 @@ def _free_mb(path):
 # the board, and mixing the two is what made the provenance note ambiguous.
 MODEL = 'IceRiver RX0 (Radiant / SHA512-256d)'
 
+# The release of THIS project, hand-maintained, and the single place it is
+# written down. Bump it here and nowhere else; the git tag should be made to
+# match, not the other way round.
+#
+# This does not replace bridgeInstalledMs below, because the two answer
+# different questions and only one of them is about releases:
+#
+#   VERSION            "which release is this" - for the README, for a bug
+#                      report from someone running the public build, for
+#                      telling two installs apart.
+#   bridgeInstalledMs  "is the miner running the build I just deployed" - the
+#                      running file's own mtime, which cannot be forgotten
+#                      about or left stale the way a hand-typed string can.
+#
+# A version string alone would quietly lie after any deploy that did not bump
+# it, which is precisely the failure the mtime was added to avoid. Keeping
+# both means a stale VERSION is still caught by an install time that moved.
+VERSION = '0.2.0'
+
 HARDWARE = [
     # The only thing actually printed on the PCB.
     ('Control board', 'IR_HB_4X3_830_V10', 'board silkscreen'),
@@ -2035,6 +2054,7 @@ def about():
         # puts them in different tables so its provenance note can sit
         # under exactly the rows it describes.
         'model': MODEL,
+        'version': VERSION,
         'hardware': [{'label': l, 'value': v, 'source': s} for l, v, s in HARDWARE],
         'firmware': firmware,
         'kernel': ' '.join(os.uname()[:3]) if hasattr(os, 'uname') else None,

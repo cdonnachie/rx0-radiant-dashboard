@@ -52,6 +52,20 @@ except Exception, ex:
     data = {}
 
 print('')
+print('=== VERSION is a release string, and /about reports it')
+import re as _re
+check('VERSION is semver-shaped',
+      bool(_re.match(r'^\d+\.\d+\.\d+$', b.VERSION)), b.VERSION)
+_about = b.about()
+check('/about carries it', _about.get('version') == b.VERSION,
+      _about.get('version'))
+# The two coexist on purpose: a hand-typed version can go stale, an mtime
+# cannot. Losing the mtime would remove the only check on a forgotten bump.
+check('/about still carries bridgeInstalledMs alongside it',
+      _about.get('bridgeInstalledMs') is not None,
+      _about.get('bridgeInstalledMs'))
+
+print('')
 print('=== the loopback panel has its own timeout, not the per-peer one')
 # Raising SWARM_TIMEOUT instead would have been the easy fix and the wrong one:
 # /swarm joins every peer thread for SWARM_TIMEOUT + 1.0, so a bigger per-peer
