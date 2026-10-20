@@ -514,6 +514,9 @@ function rxdRefreshPanel() {
 				}
 			});
 			rxdRenderDayTile();
+			// After the chain: content2() rewrites the stock tile every pass,
+			// which would drop the mark if it were applied before.
+			rxdRenderHalfHourMark(re.data);
 		})
 		.always(function() { RXD.refreshInFlight = false; });
 }
@@ -700,6 +703,54 @@ function rxdRenderDayTile() {
 	panel.find('.rxd-day-mark').text(mixed ? '*' : '');
 	panel.toggleClass('is-mixed', mixed);
 	panel.attr('title', note);
+}
+
+/* --- the stock 30-minute tile, marked while it is still filling ------------
+
+   The miner's 30-minute average refills linearly from zero after a restart.
+   At 12 minutes of uptime it therefore reads about 12/30 of the truth - 96
+   GH/s against a real 291 - and then climbs to the right figure on
+   arithmetic alone, with the silicon doing nothing different. Shown bare it
+   is indistinguishable from a machine that is genuinely slow, which is the
+   exact misreading this dashboard exists to prevent: the same trap as
+   calling a 5-minute average "live", one tile to the left.
+
+   The 24h tile beside it already marks a window that cannot be taken at face
+   value, so this reuses that convention rather than inventing a second one -
+   including the class, so both asterisks pick up identical styling wherever
+   it is defined.
+
+   Blanking the tile until 30 minutes had passed was the other option and it
+   is worse: an empty tile reads as a fault, and during the first half hour
+   this is one of the few live numbers on the page. Marked and explained
+   beats hidden. */
+
+var RXD_HALFHOUR_SECONDS = 30 * 60;
+
+function rxdRenderHalfHourMark(data) {
+	var panel = $('.right .content2 .panlcss').has('.svgspeedcss').first();
+	if (panel.length === 0) return;
+
+	var mark = panel.find('.rxd-halfhour-mark');
+	if (mark.length === 0) {
+		mark = $('<span class="rxd-day-mark rxd-halfhour-mark"></span>');
+		panel.find('.svgspeedcss').first().after(mark);
+	}
+
+	// 0 is "unparseable", not "just booted" - rxdRuntimeSeconds returns it for
+	// anything that is not the stock d:h:m:s shape. Stamping a warning on a
+	// number we have no uptime for would be a guess, so say nothing.
+	var elapsed = rxdRuntimeSeconds(data && data.runtime);
+	var filling = elapsed > 0 && elapsed < RXD_HALFHOUR_SECONDS;
+
+	mark.text(filling ? '*' : '');
+	panel.toggleClass('is-filling', filling);
+	panel.attr('title', filling
+		? 'Still filling: ' + Math.floor(elapsed / 60) + ' of 30 minutes since' +
+		  ' the miner restarted. This average refills from zero, so it reads low' +
+		  ' and will keep climbing on arithmetic alone. The real-time figure is' +
+		  ' the one to read until this window is full.'
+		: 'Mean over the last 30 minutes.');
 }
 
 /* --- manual refresh and countdown -----------------------------------------
@@ -919,6 +970,10 @@ function rxdWarmupPoll() {
 		.done(function(re) {
 			if (!re || re.error !== 0 || !re.data) return;
 			rxdRenderWarmup(re.data);
+			// This poll runs every 20 s against the refresh's 60, so the mark
+			// appears promptly after a restart. It outlives this timer, which
+			// stops at 15 min - the minute refresh carries it to 30.
+			rxdRenderHalfHourMark(re.data);
 
 			var elapsed = rxdRuntimeSeconds(re.data.runtime);
 			var settled = rxdHashrateGH(re.data) > 0 || elapsed >= RXD_WARMUP_LIMIT;
@@ -1182,6 +1237,13 @@ function rxdRenderHealth(data) {
 		.attr('title', state.title);
 }
 
+/* How the miner's two hashrate figures average, for the line beside the pill.
+   Naming the window is not decoration: rtpow is a FIVE MINUTE trailing average,
+   so two readings taken a minute apart overlap by four fifths and are not
+   independent samples. Repeating a reading shows the board is steady; it does
+   not sharpen the number. Independent samples need to be a window apart. */
+var RXD_PERF_WINDOWS = { '5min': '5 min avg', '30min': '30 min avg' };
+
 /* Actual against what the cores and clock say the board should be producing -
  * the shortfall a clock change is really buying or losing, rather than the raw
  * hashrate which says nothing on its own.
@@ -1189,10 +1251,47 @@ function rxdRenderHealth(data) {
  * The per-cycle constant behind "expected" is inferred from measurement, not
  * from a datasheet, so this is a relative scale across clocks on one board.
  * The thresholds are set accordingly: anything from 95% up reads as fine,
- * because a few percent either side of 100 is not a real signal. What IS real
- * is the shape - 645, 700, 750 and 775 all sit near the top of the band on
- * this board (700 reads about 98%, 775 about 95%) and 800 falls to 86%, which
- * is how the cliff shows up here. */
+ * because a few percent either side of 100 is not a real signal - a reading
+ * slightly over 100 means the constant is a shade low, not that the board beat
+ * physics. What IS real is the shape - 645, 700, 750 and 775 all sit near the
+ * top of the band on this board (700 reads about 98%, 775 about 96%) and 800
+ * falls to 86%, which is how the cliff shows up here.
+ *
+ * THE TRAP, and the reason the absolute figure sits beside the pill rather
+ * than behind its tooltip: expected scales with the clock, so on a board whose
+ * hashrate has plateaued, LOWERING the clock raises this percentage while the
+ * machine does less work. A second RX0 we screened read 101.1% at 650 MHz and
+ * 95.7% at 675 for the same ~282 GH/s, then 99.3% at 625 for only 268. Follow
+ * the percentage downward and you arrive at a slower miner wearing a better
+ * number. Use it to REJECT a clock - a clock that is failing to convert shows
+ * both figures falling together, 700 MHz reading 82% and 248 GH/s on that same
+ * board - and use the GH/s to choose one.
+ *
+ * One more thing the window hides: a marginal clock keeps sliding as the die
+ * warms. That 700 MHz reading was 248 GH/s at 11 minutes and 240 at 25. So an
+ * 11-minute screen flatters a bad clock, which makes a rejection safe and an
+ * acceptance provisional until it has held for hours. */
+function rxdPerfSummary(perf) {
+	if (!perf || !perf.percent) return '';
+	var parts = [Math.round(perf.actual) + ' GH/s'];
+	if (perf.mhz) parts.push('at ' + perf.mhz + ' MHz');
+	var avg = RXD_PERF_WINDOWS[perf.window];
+	if (avg) parts.push('· ' + avg);
+	return parts.join(' ');
+}
+
+function rxdPerfTitle(perf) {
+	if (!perf || !perf.percent) return 'Not enough information yet';
+	return Math.round(perf.actual) + ' GH/s against ' + Math.round(perf.expected) +
+		' expected: ' + perf.cores + ' cores x ' + perf.mhz + ' MHz x ' +
+		perf.hashesPerCoreCycle + ' hashes per core per cycle. That last figure is ' +
+		'inferred from measurement rather than a datasheet, so read this as a ' +
+		'relative scale across clocks on one board, not an absolute specification. ' +
+		'Expected scales with the clock, so a lower clock lifts this percentage ' +
+		'even when the miner is doing less work - reject a clock on it, but choose ' +
+		'one on the GH/s beside it. Dead cores lower the expectation too, so read ' +
+		'this next to the core count.';
+}
 function rxdRenderPerformance(perf) {
 	var panel = $('.right .content2 .panlcss').has('.speedcss').first();
 	if (panel.length === 0 || !perf) return;
@@ -1212,7 +1311,7 @@ function rxdRenderPerformance(perf) {
 	pill.removeClass('content2radiusGreencss content2radiusRedcss');
 
 	if (!perf.percent) {
-		pill.text('--').attr('title', 'Not enough information yet');
+		pill.text('--').attr('title', rxdPerfTitle(perf));
 		rxdHealthValue(panel, '.rxd-perf-pill', '');
 		return;
 	}
@@ -1221,17 +1320,8 @@ function rxdRenderPerformance(perf) {
 	if (perf.percent >= 95) pill.addClass('content2radiusGreencss');
 	else if (perf.percent < 85) pill.addClass('content2radiusRedcss');
 
-	pill.attr('title',
-		Math.round(perf.actual) + ' GH/s against ' + Math.round(perf.expected) +
-		' expected: ' + perf.cores + ' cores x ' + perf.mhz + ' MHz x ' +
-		perf.hashesPerCoreCycle + ' hashes per core per cycle. That last figure ' +
-		'is a fixed firmware constant, not a per-board calibration, so this ' +
-		'percentage is comparable between miners - leave it alone unless the ' +
-		'board design differs. Dead cores lower the expectation too, so read ' +
-		'this next to the core count.');
-
-	rxdHealthValue(panel, '.rxd-perf-pill',
-		Math.round(perf.actual) + ' of ' + Math.round(perf.expected) + ' GH/s');
+	pill.attr('title', rxdPerfTitle(perf));
+	rxdHealthValue(panel, '.rxd-perf-pill', rxdPerfSummary(perf));
 }
 
 function rxdFetchPerformance() {
