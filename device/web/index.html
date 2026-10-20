@@ -35,6 +35,9 @@
 		<span class="sr-only">Radiant RX0</span>
 	</h1>
 	<span class="sub" id="model">&mdash;</span>
+	<!-- Hidden until /about answers, so a first read that fails shows nothing
+	     rather than a placeholder that looks like a real version. -->
+	<span class="sub ver" id="version" hidden></span>
 	<span class="spacer"></span>
 	<span class="sub"><span class="dot" id="dot"></span><span id="status">connecting</span></span>
 </header>
@@ -176,6 +179,207 @@
 		is reliable; a difference of one degree between two chips is not, which
 		is why only the hottest and coldest are marked rather than every chip
 		being shaded along a gradient.</p>
+	</div>
+
+	<div class="chart-head">
+		<h2>Chip history</h2>
+		<div class="ranges" id="chipRanges"></div>
+	</div>
+
+	<div class="card" id="chipTempCard">
+		<div class="legend" id="chipTempLegend"></div>
+		<svg class="chart" id="chipTempChart"></svg>
+		<div class="spinner"><i></i><span class="spin-label"></span></div>
+	</div>
+
+	<div class="card" id="chipVoltCard">
+		<div class="legend" id="chipVoltLegend"></div>
+		<svg class="chart" id="chipVoltChart"></svg>
+		<div class="spinner"><i></i><span class="spin-label"></span></div>
+	</div>
+
+	<div class="card" id="chipPllCard">
+		<div class="legend" id="chipPllLegend"></div>
+		<svg class="chart" id="chipPllChart"></svg>
+		<div class="spinner"><i></i><span class="spin-label"></span></div>
+	</div>
+
+	<div class="note">
+		<p><b>Min, average and max are across the twelve chips at one instant</b>,
+		not across time. The gap between min and max is the spread shown above;
+		watching it widen is the useful signal, because a single chip pulling
+		away from the others is how a cooling problem starts.</p>
+		<p><b>The PLL chart should be a flat line.</b> It is drawn precisely
+		because a flat line is the expectation &mdash; a chip that drops off the
+		configured clock is reporting a fault, and nothing else on this page
+		would show it.</p>
+	</div>
+
+</section>
+
+<section class="page hide" id="page-fan">
+
+	<h2>Fan</h2>
+	<div class="card">
+		<div class="power-now" id="fanNow">&mdash;</div>
+		<form class="power-form" id="fanForm">
+			<label for="fanModeSel">Mode</label>
+			<select id="fanModeSel">
+				<option value="target">Hold a temperature</option>
+				<option value="fixed">Fixed duty</option>
+			</select>
+			<label for="fanTargetIn">Target &deg;C</label>
+			<input type="number" id="fanTargetIn" min="40" max="85" step="1">
+			<label for="fanRatioIn">Duty %</label>
+			<input type="number" id="fanRatioIn" min="0" max="100" step="1">
+			<label for="fanMinIn">Min %</label>
+			<input type="number" id="fanMinIn" min="10" max="100" step="1">
+			<label for="fanMaxIn">Max %</label>
+			<input type="number" id="fanMaxIn" min="10" max="100" step="1">
+			<button type="submit" id="fanSave">Apply</button>
+		</form>
+		<div class="power-msg" id="fanMsg"></div>
+	</div>
+
+	<div class="note">
+		<p><b>The bounds clamp, they do not refuse.</b> Ask for a duty of 200%
+		and the miner stores 100 without complaining, so what comes back after
+		applying is the configuration that is actually running &mdash; which is
+		not always the one that was typed. Any value that got changed on the way
+		in is called out above.</p>
+		<p><b>Below about 19% duty the tachometer reads zero</b> while the fan is
+		still turning: the miner's pulse counter is simply too slow to catch it.
+		That is why a low duty shows the percentage rather than "0 rpm", which
+		would read as a stopped fan.</p>
+		<p><b>Applying restarts the fan service</b>, which is how a change takes
+		effect &mdash; it reads its configuration once at startup. The miner
+		keeps hashing throughout; only the controller is restarted.</p>
+	</div>
+
+</section>
+
+<section class="page hide" id="page-clock">
+
+	<h2>Clock</h2>
+	<div class="card">
+		<div class="power-now" id="clockNow">&mdash;</div>
+		<form class="power-form" id="clockForm">
+			<label for="clockSel">Chip clock</label>
+			<select id="clockSel"></select>
+			<button type="submit" id="clockSave">Apply</button>
+		</form>
+		<div class="power-msg" id="clockMsg"></div>
+	</div>
+
+	<div class="note">
+		<p><b>Applying a clock reboots the miner.</b> The value is written to the
+		EEPROM and only takes effect when the miner reads it at startup, so there
+		is no way to change the clock without one. Mining stops for the length of
+		a boot plus a warm-up of about an hour before any reading here can be
+		compared against another.</p>
+		<p><b>This machine has already been screened and 770 MHz won.</b> Measured
+		on hourly means, like for like: 770 at 320.7 GH/s over 27 closed hours,
+		775 at 318.5 over 37, and 790 and 800 collapse to 306.5 and 295.8. The
+		ladder is closed &mdash; there is no clock here that beats the one it is
+		running, and a 180 W power supply made no difference to that.</p>
+		<p><b>A single reading after a change proves nothing.</b> Two boots at the
+		same clock read 305 and 316 GH/s at seven minutes. Rejecting a clock
+		early is safe; accepting one needs hours.</p>
+	</div>
+
+</section>
+
+<section class="page hide" id="page-logs">
+
+	<h2>Logs</h2>
+	<div class="card"><div class="tablewrap">
+		<table class="ptable" id="logTable"></table></div></div>
+
+	<div class="card hide" id="logViewCard">
+		<div class="power-now" id="logViewName">&mdash;</div>
+		<pre class="logview" id="logView"></pre>
+	</div>
+
+	<div class="note">
+		<p><b>These are the miner's logs, not this dashboard's.</b>
+		<code>run.log</code> is the current boot; <code>his.log</code> is every
+		boot before it, rolled in at startup and trimmed to 2 MiB, so it spans
+		weeks and several reboots rather than one run.</p>
+		<p><b>Viewing shows the tail</b>, because these files reach megabytes and
+		the interesting end is the recent one. Download gets the whole file.</p>
+	</div>
+
+</section>
+
+<section class="page hide" id="page-swarm">
+
+	<h2>Swarm</h2>
+	<div class="card">
+		<div class="power-now" id="swarmNow">&mdash;</div>
+		<div class="tablewrap"><table class="ptable" id="swarmTable"></table></div>
+	</div>
+
+	<h2>Peers</h2>
+	<div class="card">
+		<form class="power-form" id="peerForm">
+			<label for="peerHost">Address</label>
+			<input type="text" id="peerHost" placeholder="10.0.0.213" maxlength="60">
+			<label for="peerName">Name</label>
+			<input type="text" id="peerName" placeholder="RX0-2" maxlength="40">
+			<button type="submit" id="peerAdd">Add</button>
+			<span class="spacer"></span>
+			<label for="scanPrefix">Scan</label>
+			<input type="text" id="scanPrefix" placeholder="10.0.0" maxlength="40">
+			<button type="button" id="scanBtn">Find miners</button>
+		</form>
+		<div class="power-msg" id="peerMsg"></div>
+		<div class="tablewrap"><table class="ptable" id="peerTable"></table></div>
+	</div>
+
+	<div class="note">
+		<p><b>Each miner is asked directly and the answers are merged here.</b>
+		A peer running this bridge reports its chip detail; one still on stock
+		firmware answers from its own web API instead, which is why some rows
+		have a clock and chip count and others do not.</p>
+		<p><b>A peer that does not answer within four seconds is abandoned</b>,
+		so one sleeping miner cannot stall the table. It shows as not alive
+		rather than holding up the rest.</p>
+	</div>
+
+</section>
+
+<section class="page hide" id="page-about">
+
+	<h2>This miner</h2>
+	<div class="card"><div class="tablewrap">
+		<table class="ptable" id="aboutIdentity"></table></div></div>
+
+	<h2>Boards</h2>
+	<div class="card"><div class="tablewrap">
+		<table class="ptable" id="aboutBoards"></table></div></div>
+
+	<h2>SoC rails</h2>
+	<div class="card"><div class="tablewrap">
+		<table class="ptable" id="aboutRails"></table></div></div>
+
+	<h2>Hardware</h2>
+	<div class="card"><div class="tablewrap">
+		<table class="ptable" id="aboutHardware"></table></div></div>
+
+	<h2>Storage</h2>
+	<div class="card"><div class="tablewrap">
+		<table class="ptable" id="aboutStorage"></table></div></div>
+
+	<div class="note">
+		<p><b>The board voltage is a configured setting, not a measurement.</b>
+		It is EEPROM bytes 0&ndash;1 divided by 100 &mdash; what the miner was
+		told to run at. Nothing on this machine reads the board's actual supply,
+		so a board that is browning out would still show its nominal figure here.</p>
+		<p><b>The rails are measured</b>, by the SoC's own XADC, and are the one
+		place on this page where "in band" means a real reading was compared
+		against a real tolerance.</p>
+		<p>Where a row says where its value came from, that is because the value
+		cannot be read back from the hardware and was transcribed by eye.</p>
 	</div>
 
 </section>

@@ -226,7 +226,19 @@ check('and keeps nothing inline, or the split has half come undone',
 // functions this harness has no DOM for, so they are blanked before eval.
 eval(src.match(/var PAGES = \[[\s\S]*?\];/)[0].replace(/onShow: \w+/g, 'onShow: null'));
 const panels = markup.match(/<section class="page( hide)?" id="page-[a-z]+">/g) || [];
-check('there is one panel per page', panels.length, PAGES.length);
+// Not a bare count any more. The Clock page is spliced into PAGES at runtime
+// by maybeAddClockPage, only on a miner whose install enabled overclocking, so
+// its panel is in the markup while its entry is not in the literal array. The
+// invariant is still "no panel without a page and no page without a panel" -
+// it just has to know about the one that arrives late.
+const runtimePages = [...src.matchAll(/PAGES\.splice\([\s\S]{0,80}?id: '([a-z]+)'/g)]
+    .map(m => m[1]);
+check('the only panel not in the PAGES literal is one added at runtime',
+    panels.map(s => s.match(/id="page-([a-z]+)"/)[1])
+        .filter(id => !PAGES.some(p => p.id === id)),
+    runtimePages);
+check('and the runtime one is the overclock page, which is install-gated',
+    runtimePages, ['clock']);
 check('every page in the nav has a panel to show',
     PAGES.filter(p => !markup.includes('id="page-' + p.id + '"')), []);
 // Exactly one, or the page opens showing two panels stacked, or none at all
@@ -245,8 +257,17 @@ const wanted = Array.from(new Set(
     Array.from(src.matchAll(/\$\('([a-zA-Z][\w-]*)'\)/g)).map(m => m[1])));
 check('the script reaches for more than a couple of elements',
     wanted.length > 20, true);
-check('and every one of them exists in the markup',
-    wanted.filter(id => !markup.includes('id="' + id + '"')), []);
+// An element the script BUILDS is as real as one in index.html - the peer
+// rename box lives inside a row that renderPeers writes - so the rule is
+// "declared somewhere", not "declared in the markup". Still catches the thing
+// it was written for: an id that exists in neither.
+const built = new Set(
+    Array.from(src.matchAll(/id="([a-zA-Z][\w-]*)"/g)).map(m => m[1]));
+check('and every one of them exists in the markup or is built by the script',
+    wanted.filter(id => !markup.includes('id="' + id + '"') && !built.has(id)), []);
+// Named so the exception stays deliberate rather than becoming a hole.
+check('exactly the ids the script builds for itself',
+    wanted.filter(id => !markup.includes('id="' + id + '"')), ['peerRename']);
 
 console.log('');
 if (failures) { console.log(`${failures} failed`); process.exit(1); }

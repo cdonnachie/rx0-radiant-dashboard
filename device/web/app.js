@@ -185,8 +185,29 @@ var PAGES = [
 	{ id: 'overview', label: 'Overview' },
 	{ id: 'history', label: 'History', onShow: showHistory },
 	{ id: 'efficiency', label: 'Efficiency', onShow: showEfficiency },
-	{ id: 'chips', label: 'Chips' }
+	{ id: 'chips', label: 'Chips', onShow: showChips },
+	{ id: 'fan', label: 'Fan', onShow: showFan },
+	{ id: 'logs', label: 'Logs', onShow: showLogs },
+	{ id: 'swarm', label: 'Swarm', onShow: showSwarm },
+	{ id: 'about', label: 'About' }
 ];
+
+/* The Clock page is added only on a miner whose install enabled overclocking,
+   which is what rxd_oc.enable records. A dashboard that offers a control the
+   bridge will answer 503 to is worse than one that does not mention it, and
+   this is a control that reboots the machine. Inserted before About once
+   /about says so, rather than being in the array from the start. */
+var clockPageAdded = false;
+
+function maybeAddClockPage(about) {
+	if (clockPageAdded || !about || !about.overclockEnabled) return;
+	clockPageAdded = true;
+	PAGES.splice(PAGES.length - 1, 0,
+		{ id: 'clock', label: 'Clock', onShow: showClock });
+	buildNav();
+	// The nav was rebuilt, so the current tab lost its highlight.
+	showPage(currentPage.id);
+}
 var currentPage = PAGES[0];
 var pageLoaded = {};
 
@@ -232,6 +253,37 @@ function showHistory(first) {
 
 function showEfficiency(first) {
 	if (first) loadPower();
+}
+
+function showFan(first) {
+	if (first) loadFanConfig();
+}
+
+function showLogs(first) {
+	if (first) loadLogs();
+}
+
+function showSwarm(first) {
+	if (first) {
+		if (!$('scanPrefix').value) $('scanPrefix').value = defaultPrefix();
+		loadPeers();
+		loadSwarm();
+	}
+}
+
+function showClock(first) {
+	if (first) loadClock();
+}
+
+function showChips(first) {
+	if (first) {
+		buildChipRanges();
+		loadChipHistory();
+		return;
+	}
+	// Same reason as showHistory: an SVG inside a hidden page has no width, so
+	// the charts must be redrawn on every reveal, not only when data changes.
+	drawChipHistory();
 }
 
 function routeFromHash() {
@@ -347,6 +399,138 @@ function renderPool(pool) {
 function renderAbout(about) {
 	$('model').textContent = about.model || '';
 	$('uptime').textContent = fmtUptime(num(about.uptimeSeconds));
+	renderVersion(about);
+	renderAboutPage(about);
+	maybeAddClockPage(about);
+}
+
+/* --- About -----------------------------------------------------------------
+
+   Rendered on every tick rather than once on first open, because /about is
+   already being fetched every tick for the model and uptime and the rails
+   move. A page that was built once would show rail voltages frozen at
+   whenever it happened to be opened, which is worse than not showing them.
+
+   Everything here is already in the payload - before this page existed the
+   browser was fetching nine fields every ten seconds and using one. */
+
+function esc(s) {
+	return String(s === null || s === undefined ? '' : s)
+		.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+// Label and value, nothing else. An earlier version carried a third column of
+// notes - "since boot", "from the package filename" - next to rows that say
+// what they are perfectly well on their own. Where a value genuinely needs
+// explaining, the note under the page is the place for it; a gloss on every
+// row just makes the ones that matter harder to spot.
+function rows(pairs) {
+	return pairs.filter(function(p) { return p[1] !== null && p[1] !== undefined && p[1] !== ''; })
+		.map(function(p) {
+			return '<tr><th>' + esc(p[0]) + '</th><td>' + p[1] + '</td></tr>';
+		}).join('');
+}
+
+function fmtMB(mb) {
+	var v = num(mb);
+	if (v === null) return null;
+	return v >= 1024 ? (v / 1024).toFixed(1) + ' GB' : v.toFixed(0) + ' MB';
+}
+
+function renderAboutPage(about) {
+	var table = $('aboutIdentity');
+	if (!table) return;
+
+	var installed = num(about.bridgeInstalledMs);
+	table.innerHTML = rows([
+		['Model', esc(about.model)],
+		['Dashboard', about.version ? 'v' + esc(about.version) : null],
+		['Bridge installed', installed === null ? null
+			: esc(new Date(installed).toLocaleString())],
+		['Firmware', esc(about.firmware)],
+		['Kernel', esc(about.kernel)],
+		['Uptime', esc(fmtUptime(num(about.uptimeSeconds)))],
+		// Named in the label rather than in a note beside it: this is the
+		// control board's sensor, and reading it as a chip temperature is the
+		// one mistake this row can cause.
+		['SoC temperature (control board)', num(about.socTemp) === null ? null
+			: num(about.socTemp).toFixed(1) + ' °C'],
+		['SSH port', esc(about.sshPort)],
+		['Overclocking', about.overclockEnabled ? 'enabled' : 'not enabled']
+	]);
+
+	$('aboutBoards').innerHTML =
+		'<tr><th>Board</th><th>Chips</th><th>Clock</th><th>Board volts</th></tr>' +
+		(about.boards || []).map(function(b) {
+			return '<tr><td>' + esc(b.board) + '</td><td>' + esc(b.chipcount) +
+				'</td><td>' + esc(b.pll) + ' MHz</td><td>' +
+				(num(b.volts) === null ? '—' : num(b.volts).toFixed(2) + ' V') +
+				'</td></tr>';
+		}).join('');
+
+	$('aboutRails').innerHTML =
+		'<tr><th>Rail</th><th>Measured</th><th>Nominal</th><th>State</th></tr>' +
+		(about.rails || []).map(function(r) {
+			var v = num(r.volts), nom = num(r.nominal), band = num(r.band);
+			// The tolerance is named in the row rather than only encoded in the
+			// pass/fail, so "in band" can be checked rather than trusted.
+			var limits = (nom === null || band === null) ? '' :
+				' ±' + Math.round(band * 100) + '%';
+			return '<tr><td>' + esc(r.label) + '</td><td>' +
+				(v === null ? '—' : v.toFixed(3) + ' V') + '</td><td>' +
+				(nom === null ? '—' : nom.toFixed(2) + ' V' + limits) +
+				'</td><td class="' + (r.ok ? 'ok' : 'bad') + '">' +
+				(r.ok ? 'in band' : 'OUT OF BAND') + '</td></tr>';
+		}).join('');
+
+	$('aboutHardware').innerHTML =
+		'<tr><th>Part</th><th>Value</th><th>How it is known</th></tr>' +
+		(about.hardware || []).map(function(h) {
+			return '<tr><td>' + esc(h.label) + '</td><td>' + esc(h.value) +
+				'</td><td>' + esc(h.source) + '</td></tr>';
+		}).join('');
+
+	var st = about.storage || {}, sd = about.sd || {};
+	var store = [
+		['NAND (/)', st.root, 'firmware and the bridge'],
+		['tmpfs (/var/volatile)', st.volatile, 'RAM; lost on reboot']
+	].filter(function(p) { return p[1]; }).map(function(p) {
+		return '<tr><td>' + esc(p[0]) + '</td><td>' + esc(fmtMB(p[1].free)) +
+			' free</td><td>' + esc(fmtMB(p[1].total)) + '</td><td>' +
+			esc(p[2]) + '</td></tr>';
+	}).join('');
+	// No card is a normal state, not a fault - sampling falls back to NAND.
+	// Only the ARCHIVE needs a card, so that is what the row says.
+	store += sd.mount
+		? '<tr><td>SD card' + (sd.card ? ' (' + esc(sd.card) + ')' : '') +
+		  '</td><td>' + esc(fmtMB(sd.free)) + ' free</td><td>' +
+		  esc(fmtMB(sd.total)) + '</td><td>' + esc(sd.mount) + '</td></tr>'
+		: '<tr><td>SD card</td><td colspan="3">none — logs go to NAND and are'
+		  + ' capped; nothing is archived</td></tr>';
+	$('aboutStorage').innerHTML =
+		'<tr><th>Store</th><th>Free</th><th>Total</th><th></th></tr>' + store;
+}
+
+// The release string, with the bridge's install time behind it on hover.
+//
+// Both, because they answer different questions and either alone misleads.
+// VERSION is hand-maintained, so it still reads correctly after a deploy that
+// forgot to bump it; bridgeInstalledMs cannot be forgotten but says nothing
+// about which release this is. Together, a version that did not move while the
+// install time did is visible rather than silent.
+function renderVersion(about) {
+	var el = $('version');
+	if (!el) return;
+	if (!about.version) {
+		el.hidden = true;
+		return;
+	}
+	el.textContent = 'v' + about.version;
+	var installed = num(about.bridgeInstalledMs);
+	el.title = installed === null
+		? 'bridge install time unknown'
+		: 'bridge installed ' + new Date(installed).toLocaleString();
+	el.hidden = false;
 }
 
 // /about carries the fan CONFIG - what rxd_fan.conf asks for, as strings.
@@ -770,6 +954,669 @@ function buildRanges() {
 	});
 }
 
+/* --- chip history ----------------------------------------------------------
+
+   /chiphistory answers in PARALLEL ARRAYS - one timestamps array and one array
+   per metric - rather than the [epoch, value] pairs /history returns, so the
+   two cannot share a loader. zip() below is the whole difference.
+
+   The spread between tempMin and tempMax is the reason this page exists. The
+   live grid above shows it at one instant; only the chart shows it widening,
+   and a single chip pulling away from the others is how a cooling problem
+   announces itself long before the average moves. */
+
+var chipHistory = null;
+var chipRange = RANGES[1];
+var chipReq = 0;
+
+function zip(times, values) {
+	if (!times || !values) return [];
+	var out = [], n = Math.min(times.length, values.length);
+	for (var i = 0; i < n; i++) {
+		if (values[i] === null || values[i] === undefined) continue;
+		out.push([times[i], values[i]]);
+	}
+	return out;
+}
+
+function chipSeries() {
+	if (!chipHistory) return null;
+	var t = chipHistory.timestamps || [];
+	var boards = chipHistory.boards || {};
+	var key = Object.keys(boards)[0];
+	var b = key ? boards[key] : {};
+	// 0 and 127 are the sensor's two failure codes, not temperatures - the
+	// same rule the History page applies. See the 127 C fix in the bridge.
+	var dropSensor = function(v) { return v === 0 || v === 127; };
+	return {
+		temp: [
+			{ label: 'Hottest chip', color: '#E0A030', unit: '°C', dp: 1,
+			  points: zip(t, b.tempMax), drop: dropSensor },
+			{ label: 'Average', color: '#00F2F2', unit: '°C', dp: 1,
+			  points: zip(t, b.tempAvg), drop: dropSensor },
+			{ label: 'Coldest chip', color: '#00A8DE', unit: '°C', dp: 1,
+			  points: zip(t, b.tempMin), drop: dropSensor },
+			{ label: 'SoC', color: '#8A94A6', unit: '°C', dp: 1,
+			  points: zip(t, chipHistory.soc), drop: dropSensor }
+		],
+		volt: [
+			{ label: 'Highest', color: '#E0A030', unit: ' mV', dp: 0,
+			  points: zip(t, b.voltMax) },
+			{ label: 'Average', color: '#00F2F2', unit: ' mV', dp: 0,
+			  points: zip(t, b.voltAvg) },
+			{ label: 'Lowest', color: '#00A8DE', unit: ' mV', dp: 0,
+			  points: zip(t, b.voltMin) }
+		],
+		pll: [
+			{ label: 'Highest', color: '#E0A030', unit: ' MHz', dp: 0,
+			  points: zip(t, b.pllMax) },
+			{ label: 'Average', color: '#00F2F2', unit: ' MHz', dp: 0,
+			  points: zip(t, b.pllAvg) },
+			{ label: 'Lowest', color: '#00A8DE', unit: ' MHz', dp: 0,
+			  points: zip(t, b.pllMin) }
+		]
+	};
+}
+
+function drawChipHistory() {
+	var s = chipSeries();
+	if (!s) return;
+	[['chipTemp', s.temp], ['chipVolt', s.volt], ['chipPll', s.pll]]
+		.forEach(function(pair) {
+			var id = pair[0], series = pair[1];
+			$(id + 'Legend').innerHTML = legendHTML(series);
+			// No yMin 0 here, unlike the hashrate chart: these are narrow bands
+			// around a working point, and anchoring them at zero would flatten
+			// the only thing worth seeing into a straight line.
+			drawChart($(id + 'Chart'), series,
+				{ hours: chipRange.hours, legend: $(id + 'Legend') });
+		});
+}
+
+function setChipBusy(busy, label) {
+	['chipTempCard', 'chipVoltCard', 'chipPllCard'].forEach(function(id) {
+		var card = $(id);
+		if (!card) return;
+		card.className = busy ? 'card busy' : 'card';
+		var text = card.querySelector('.spin-label');
+		if (text) text.textContent = label || '';
+	});
+	Array.prototype.forEach.call($('chipRanges').children, function(b) {
+		b.disabled = !!busy;
+	});
+}
+
+function loadChipHistory() {
+	var id = ++chipReq;                 // same stale-response guard as /history
+	var range = chipRange;
+	setChipBusy(true, 'loading ' + range.label + '…');
+	return getJSON('/chiphistory?hours=' + range.hours + '&points=' + range.points)
+		.then(function(h) {
+			if (id !== chipReq) return;
+			chipHistory = h;
+			drawChipHistory();
+		})
+		.catch(function(ex) {
+			if (id !== chipReq) return;
+			$('chipTempChart').innerHTML = '';
+			$('chipTempLegend').textContent =
+				'chip history unavailable: ' + (ex.message || ex);
+		})
+		.then(function() {
+			if (id === chipReq) setChipBusy(false);
+		});
+}
+
+function buildChipRanges() {
+	$('chipRanges').innerHTML = RANGES.map(function(r) {
+		return '<button data-h="' + r.hours + '"' +
+			(r === chipRange ? ' class="on"' : '') + '>' + r.label + '</button>';
+	}).join('');
+	Array.prototype.forEach.call($('chipRanges').children, function(btn) {
+		btn.addEventListener('click', function() {
+			var hours = Number(btn.getAttribute('data-h'));
+			RANGES.forEach(function(r) { if (r.hours === hours) chipRange = r; });
+			buildChipRanges();
+			loadChipHistory();
+		});
+	});
+}
+
+/* --- fan control -----------------------------------------------------------
+
+   The bridge CLAMPS rather than refuses: ask for 200% and it stores 100 and
+   says so in the reply. So the form is repopulated from what came back, not
+   from what was typed, and anything that changed on the way in is named. A
+   silent clamp would leave the page showing a setting the machine is not
+   running - the same class of lie as the startup log that announced "bridge
+   up" before it had bound a port. */
+
+var fanLimits = { floor: 10, targetMin: 40, targetMax: 85 };
+
+function fanSummary(fan) {
+	var live = fan.live || {};
+	var rpm = num(live.rpm), ratio = num(live.ratio);
+	var bits = [];
+	bits.push('<b>' + (fan.mode === 'fixed' ? 'Fixed duty' : 'Holding ' +
+		esc(fan.target) + ' °C') + '</b>');
+	if (ratio !== null) bits.push(ratio + '% duty');
+	bits.push(rpm === null ? 'rpm unknown'
+		: (rpm === 0 ? 'tach idle (below ~19%)' : rpm + ' rpm'));
+	if (fan.mode !== 'fixed') {
+		bits.push('range ' + esc(fan.minfan) + '–' + esc(fan.maxfan) + '%');
+	}
+	return bits.join(' · ');
+}
+
+function fillFanForm(fan) {
+	if (fan.limits) fanLimits = fan.limits;
+	$('fanNow').innerHTML = fanSummary(fan);
+	$('fanModeSel').value = fan.mode === 'fixed' ? 'fixed' : 'target';
+	$('fanTargetIn').value = num(fan.target) === null ? '' : fan.target;
+	$('fanRatioIn').value = num(fan.ratio) === null ? '' : fan.ratio;
+	$('fanMinIn').value = num(fan.minfan) === null ? '' : fan.minfan;
+	$('fanMaxIn').value = num(fan.maxfan) === null ? '' : fan.maxfan;
+	$('fanTargetIn').min = fanLimits.targetMin;
+	$('fanTargetIn').max = fanLimits.targetMax;
+	$('fanMinIn').min = fanLimits.floor;
+	$('fanMaxIn').min = fanLimits.floor;
+	syncFanMode();
+}
+
+// In target mode the duty is the controller's to choose, so showing an
+// editable box for it invites someone to set a value that is immediately
+// overwritten. Disabled rather than hidden, so the layout does not jump.
+function syncFanMode() {
+	var fixed = $('fanModeSel').value === 'fixed';
+	$('fanRatioIn').disabled = !fixed;
+	$('fanTargetIn').disabled = fixed;
+	$('fanMinIn').disabled = fixed;
+	$('fanMaxIn').disabled = fixed;
+}
+
+function loadFanConfig() {
+	return getJSON('/fan').then(fillFanForm).catch(function(ex) {
+		$('fanMsg').className = 'power-msg bad';
+		$('fanMsg').textContent = 'could not read the fan: ' + (ex.message || ex);
+	});
+}
+
+function submitFan(event) {
+	event.preventDefault();
+	var asked = {
+		mode: $('fanModeSel').value,
+		ratio: Number($('fanRatioIn').value),
+		target: Number($('fanTargetIn').value),
+		minfan: Number($('fanMinIn').value),
+		maxfan: Number($('fanMaxIn').value)
+	};
+	var msg = $('fanMsg');
+	$('fanSave').disabled = true;
+	msg.className = 'power-msg';
+	msg.textContent = 'applying…';
+
+	fetch('/setfan', {
+		method: 'POST',
+		headers: { 'Content-Type': 'application/json' },
+		body: JSON.stringify(asked)
+	}).then(function(r) {
+		return r.json().then(function(d) {
+			if (!r.ok) throw new Error(d.error || ('HTTP ' + r.status));
+			return d;
+		});
+	}).then(function(d) {
+		var stored = d.fan || {};
+		// Name every field the device changed. This is the whole point of
+		// reading the response instead of assuming the request took.
+		var changed = ['mode', 'ratio', 'target', 'minfan', 'maxfan']
+			.filter(function(k) {
+				return String(asked[k]) !== String(stored[k]);
+			})
+			.map(function(k) { return k + ' ' + asked[k] + ' → ' + stored[k]; });
+		msg.className = 'power-msg';
+		msg.textContent = changed.length
+			? 'applied, with changes: ' + changed.join(', ')
+			: 'applied';
+		// Re-read rather than trusting the echo: /setfan returns the CONFIG,
+		// and what the fan is actually doing lives under live on /fan.
+		return loadFanConfig();
+	}).catch(function(ex) {
+		msg.className = 'power-msg bad';
+		msg.textContent = 'could not apply: ' + (ex.message || ex);
+	}).then(function() {
+		$('fanSave').disabled = false;
+	});
+}
+
+/* --- clock -----------------------------------------------------------------
+
+   Two-step rather than a confirm() dialog, deliberately: a modal dialog blocks
+   the page and this control reboots the miner, so the confirmation is in the
+   button itself and says what it will do. */
+
+var clockArmed = false;
+var clockState = null;
+
+function loadClock() {
+	return getJSON('/clock').then(function(c) {
+		clockState = c;
+		var sel = $('clockSel'), out = [];
+		for (var mhz = c.min; mhz <= c.max; mhz += (c.step || 5)) {
+			out.push('<option value="' + mhz + '"' +
+				(mhz === c.configured ? ' selected' : '') + '>' + mhz + ' MHz' +
+				(mhz === c.configured ? ' (current)' : '') + '</option>');
+		}
+		sel.innerHTML = out.join('');
+		var live = num(c.live);
+		$('clockNow').innerHTML = '<b>' + esc(c.configured) + ' MHz</b> configured' +
+			(live === null ? '' : ' · ' + live.toFixed(0) + ' MHz reported by the chips') +
+			' · range ' + esc(c.min) + '–' + esc(c.max) + ' in ' + esc(c.step) + ' MHz steps';
+		disarmClock();
+	}).catch(function(ex) {
+		$('clockMsg').className = 'power-msg bad';
+		$('clockMsg').textContent = 'could not read the clock: ' + (ex.message || ex);
+	});
+}
+
+function disarmClock() {
+	clockArmed = false;
+	$('clockSave').textContent = 'Apply';
+	$('clockSave').className = '';
+}
+
+function submitClock(event) {
+	event.preventDefault();
+	var mhz = Number($('clockSel').value);
+	var msg = $('clockMsg');
+
+	if (clockState && mhz === clockState.configured) {
+		msg.className = 'power-msg';
+		msg.textContent = 'already set to ' + mhz + ' MHz — nothing to do';
+		return;
+	}
+
+	if (!clockArmed) {
+		clockArmed = true;
+		$('clockSave').textContent = 'Confirm ' + mhz + ' MHz — REBOOTS the miner';
+		$('clockSave').className = 'danger';
+		msg.className = 'power-msg bad';
+		msg.textContent = 'This writes the EEPROM and reboots immediately.'
+			+ ' Mining stops for a boot and about an hour of warm-up.'
+			+ ' Click again to go ahead, or change the selection to cancel.';
+		return;
+	}
+
+	$('clockSave').disabled = true;
+	msg.className = 'power-msg';
+	msg.textContent = 'writing ' + mhz + ' MHz…';
+	fetch('/setclock', {
+		method: 'POST',
+		headers: { 'Content-Type': 'application/json' },
+		body: JSON.stringify({ mhz: mhz })
+	}).then(function(r) {
+		return r.json().then(function(d) {
+			if (!r.ok) throw new Error(d.error || ('HTTP ' + r.status));
+			return d;
+		});
+	}).then(function(d) {
+		msg.className = 'power-msg';
+		msg.textContent = (d.note || 'clock set') +
+			' — this page will stop responding until the miner is back.';
+	}).catch(function(ex) {
+		msg.className = 'power-msg bad';
+		msg.textContent = 'could not set the clock: ' + (ex.message || ex);
+	}).then(function() {
+		$('clockSave').disabled = false;
+		disarmClock();
+	});
+}
+
+/* --- logs ------------------------------------------------------------------
+
+   The tail, not the whole file: his.log alone is 2.3 MB and the end is the
+   part anyone wants. Download is offered separately for the rest.
+
+   /logfile serves by NAME against a fixed catalogue - the name is never joined
+   onto a directory, so there is no path to traverse. */
+
+var LOG_TAIL_LINES = 300;
+var LOG_BIG_BYTES = 1024 * 1024;
+
+function fmtBytes(n) {
+	var v = num(n);
+	if (v === null) return '—';
+	if (v >= 1048576) return (v / 1048576).toFixed(1) + ' MB';
+	if (v >= 1024) return (v / 1024).toFixed(0) + ' KB';
+	return v + ' B';
+}
+
+function loadLogs() {
+	return getJSON('/logs').then(function(d) {
+		var head = '<tr><th>Log</th><th>Where</th><th>Size</th><th>Changed</th>'
+			+ '<th>What it is</th><th></th></tr>';
+		$('logTable').innerHTML = head + (d.logs || []).map(function(l) {
+			var mod = num(l.modified);
+			return '<tr><td>' + esc(l.name) + '</td>' +
+				'<td>' + esc(l.source === 'card' ? 'SD card' : 'NAND') + '</td>' +
+				'<td>' + esc(fmtBytes(l.bytes)) + '</td>' +
+				'<td>' + (mod === null ? '—' : esc(new Date(mod).toLocaleString())) + '</td>' +
+				'<td>' + esc(l.label) + '</td>' +
+				'<td><button type="button" data-log="' + esc(l.name) + '">tail</button> ' +
+				'<a href="/logfile?name=' + encodeURIComponent(l.name) + '">download</a>' +
+				'</td></tr>';
+		}).join('');
+		Array.prototype.forEach.call($('logTable').querySelectorAll('button'),
+			function(btn) {
+				btn.addEventListener('click', function() {
+					tailLog(btn.getAttribute('data-log'), d.logs || []);
+				});
+			});
+	}).catch(function(ex) {
+		$('logTable').innerHTML = '<tr><td>could not list the logs: ' +
+			esc(ex.message || ex) + '</td></tr>';
+	});
+}
+
+function tailLog(name, logs) {
+	var entry = null;
+	logs.forEach(function(l) { if (l.name === name) entry = l; });
+	var card = $('logViewCard'), view = $('logView');
+	card.className = 'card';
+	$('logViewName').textContent = name + ' — loading…';
+	view.textContent = '';
+	// Named rather than blocked: fetching 2 MB over a LAN is fine, it is the
+	// miner's 500 MHz core serving it that is slow, and the wait is worth
+	// knowing about before it happens rather than after.
+	if (entry && num(entry.bytes) > LOG_BIG_BYTES) {
+		$('logViewName').textContent = name + ' — reading ' +
+			fmtBytes(entry.bytes) + ', this takes a moment…';
+	}
+	fetch('/logfile?name=' + encodeURIComponent(name), { cache: 'no-store' })
+		.then(function(r) {
+			if (!r.ok) throw new Error('HTTP ' + r.status);
+			return r.text();
+		})
+		.then(function(text) {
+			var lines = text.replace(/\s+$/, '').split('\n');
+			var shown = lines.slice(-LOG_TAIL_LINES);
+			$('logViewName').textContent = name + ' — last ' + shown.length +
+				' of ' + lines.length + ' lines';
+			view.textContent = shown.join('\n');
+			view.scrollTop = view.scrollHeight;
+		})
+		.catch(function(ex) {
+			$('logViewName').textContent = name + ' — could not read: ' +
+				(ex.message || ex);
+		});
+}
+
+/* --- swarm -----------------------------------------------------------------
+
+   The peer list is written whole, not patched: POST /peers replaces it, so
+   adding or removing one means sending the rest back unchanged. */
+
+var peerList = [];
+var peerMax = 0;
+var editingPeer = -1;
+
+/* A name is written to rxd_peers.conf as "<host>  <name>" and read back with
+   split(None, 1), so SPACES ARE SAFE and survive the round trip. Two things
+   are not, and the bridge guards against neither:
+
+     * '#' - peers() does line.split('#', 1)[0], so everything from a hash
+       onward is treated as a comment and the name is silently truncated.
+     * newlines and other control characters - the file is one peer per line,
+       so a name carrying a newline injects a line into the config.
+
+   Both are stripped here rather than rejected: someone typing "shed #2" means
+   "shed 2", not an error message. */
+function tidyPeerName(text) {
+	return String(text || '')
+		.replace(/[\u0000-\u001f\u007f]+/g, ' ')
+		.replace(/#/g, '')
+		.replace(/\s+/g, ' ')
+		.trim();
+}
+
+function loadPeers() {
+	return getJSON('/peers').then(function(d) {
+		peerList = d.peers || [];
+		peerMax = d.max || 0;
+		renderPeers();
+	}).catch(function(ex) {
+		$('peerTable').innerHTML = '<tr><td>could not read peers: ' +
+			esc(ex.message || ex) + '</td></tr>';
+	});
+}
+
+function renderPeers() {
+	if (!peerList.length) {
+		$('peerTable').innerHTML =
+			'<tr><td>No peers yet. Add one above, or scan the subnet.</td></tr>';
+		return;
+	}
+	$('peerTable').innerHTML =
+		'<tr><th>Name</th><th>Address</th><th></th></tr>' +
+		peerList.map(function(p, i) {
+			if (i === editingPeer) {
+				// value= rather than textContent: this is the one place a peer
+				// name goes back into markup, so it is escaped on the way in.
+				return '<tr><td><input type="text" id="peerRename" maxlength="40"' +
+					' value="' + esc(p.name || '') + '"></td>' +
+					'<td>' + esc(p.host) + '</td>' +
+					'<td><button type="button" data-act="save" data-i="' + i +
+					'">save</button> <button type="button" data-act="cancel"' +
+					' data-i="' + i + '">cancel</button></td></tr>';
+			}
+			return '<tr><td>' + esc(p.name || '—') + '</td><td>' + esc(p.host) +
+				'</td><td><button type="button" data-act="rename" data-i="' + i +
+				'">rename</button> <button type="button" data-act="remove"' +
+				' data-i="' + i + '">remove</button></td></tr>';
+		}).join('') +
+		(peerMax ? '<tr><td colspan="3">' + peerList.length + ' of ' + peerMax +
+			' allowed</td></tr>' : '');
+
+	Array.prototype.forEach.call($('peerTable').querySelectorAll('button'),
+		function(btn) {
+			btn.addEventListener('click', function() {
+				peerAction(btn.getAttribute('data-act'),
+					Number(btn.getAttribute('data-i')));
+			});
+		});
+
+	var box = $('peerRename');
+	if (box) {
+		box.focus();
+		box.select();
+		box.addEventListener('keydown', function(ev) {
+			// Enter saves and Escape cancels, because a rename that needs the
+			// mouse for a two-character edit is a rename nobody does.
+			if (ev.key === 'Enter') { ev.preventDefault(); peerAction('save', editingPeer); }
+			else if (ev.key === 'Escape') { ev.preventDefault(); peerAction('cancel', editingPeer); }
+		});
+	}
+}
+
+function peerAction(act, i) {
+	if (act === 'remove') {
+		editingPeer = -1;
+		savePeers(peerList.filter(function(_, n) { return n !== i; }), 'removed');
+		return;
+	}
+	if (act === 'rename') {
+		editingPeer = i;
+		$('peerMsg').textContent = '';
+		renderPeers();
+		return;
+	}
+	if (act === 'cancel') {
+		editingPeer = -1;
+		renderPeers();
+		return;
+	}
+	if (act !== 'save') return;
+
+	var box = $('peerRename');
+	var typed = box ? box.value : '';
+	var name = tidyPeerName(typed);
+	editingPeer = -1;
+
+	if (name === (peerList[i] || {}).name) {
+		renderPeers();
+		$('peerMsg').className = 'power-msg';
+		$('peerMsg').textContent = 'name unchanged';
+		return;
+	}
+	var next = peerList.map(function(p, n) {
+		return n === i ? { host: p.host, name: name } : p;
+	});
+	// An empty name is legal and means "show the address": peers() falls back
+	// to the host when the label is missing. Worth saying, because the row
+	// then looks like the rename did not take.
+	savePeers(next, name ? 'renamed' : 'name cleared — the address is shown instead')
+		.then(function() {
+			// Only when the save actually worked, and only when tidying
+			// changed what was typed - silently storing something different
+			// from what someone entered is the thing being avoided here.
+			var msg = $('peerMsg');
+			if (msg.className.indexOf('bad') < 0 && name !== typed.trim()) {
+				msg.textContent += ' — stored as "' + name + '"';
+			}
+		});
+}
+
+function savePeers(entries, verb) {
+	var msg = $('peerMsg');
+	msg.className = 'power-msg';
+	msg.textContent = 'saving…';
+	return fetch('/peers', {
+		method: 'POST',
+		headers: { 'Content-Type': 'application/json' },
+		body: JSON.stringify({ peers: entries })
+	}).then(function(r) {
+		return r.json().then(function(d) {
+			if (!r.ok) throw new Error(d.error || ('HTTP ' + r.status));
+			return d;
+		});
+	}).then(function(d) {
+		peerList = d.peers || [];
+		renderPeers();
+		msg.textContent = verb + ' — ' + peerList.length + ' peer' +
+			(peerList.length === 1 ? '' : 's');
+		return loadSwarm();
+	}).catch(function(ex) {
+		msg.className = 'power-msg bad';
+		msg.textContent = 'could not save peers: ' + (ex.message || ex);
+	});
+}
+
+function addPeer(event) {
+	event.preventDefault();
+	var host = $('peerHost').value.trim();
+	if (!host) {
+		$('peerMsg').className = 'power-msg bad';
+		$('peerMsg').textContent = 'enter an address';
+		return;
+	}
+	var next = peerList.concat([{ host: host, name: $('peerName').value.trim() }]);
+	savePeers(next, 'added').then(function() {
+		$('peerHost').value = '';
+		$('peerName').value = '';
+	});
+}
+
+// The bridge wants exactly "10.0.0" - three octets, no trailing dot. Typing
+// the dot after the third octet is the natural thing to do and got a bare
+// "prefix must look like 10.0.0" rejection, so it is trimmed here rather than
+// loosening the guard on the device.
+function tidyPrefix(text) {
+	return String(text || '').trim().replace(/\.+$/, '');
+}
+
+// Prefill from whatever host this page was loaded over, so scanning the
+// miner's own /24 - the only subnet most people want - needs no typing.
+function defaultPrefix() {
+	var m = /^(\d{1,3}\.\d{1,3}\.\d{1,3})\.\d{1,3}$/.exec(location.hostname);
+	return m ? m[1] : '';
+}
+
+function scanSubnet() {
+	var prefix = tidyPrefix($('scanPrefix').value) || defaultPrefix();
+	$('scanPrefix').value = prefix;
+	var msg = $('peerMsg');
+	msg.className = 'power-msg';
+	msg.textContent = 'scanning ' + (prefix || 'this subnet') + '…';
+	$('scanBtn').disabled = true;
+	fetch('/scan', {
+		method: 'POST',
+		headers: { 'Content-Type': 'application/json' },
+		body: JSON.stringify({ prefix: prefix })
+	}).then(function(r) {
+		return r.json().then(function(d) {
+			if (!r.ok) throw new Error(d.error || ('HTTP ' + r.status));
+			return d;
+		});
+	}).then(function(d) {
+		// `new` is the useful half: hosts that answered and are NOT already
+		// peers. Reporting the full list alone makes a rescan look like it
+		// found something every time.
+		var found = d.found || [], fresh = d['new'] || [];
+		// A scan only reports; it never edits the peer list on its own. Joining
+		// a machine to a swarm is a decision, and not one a subnet sweep is
+		// entitled to make on someone's behalf.
+		if (!found.length) {
+			msg.textContent = 'nothing answered on ' + prefix + '.0/24';
+		} else if (!fresh.length) {
+			msg.textContent = 'found ' + found.length + ', all already peers: ' +
+				found.join(', ');
+		} else {
+			msg.textContent = 'found ' + fresh.length + ' not yet a peer: ' +
+				fresh.join(', ') + ' — add the ones you want above';
+		}
+	}).catch(function(ex) {
+		msg.className = 'power-msg bad';
+		msg.textContent = 'scan failed: ' + (ex.message || ex);
+	}).then(function() {
+		$('scanBtn').disabled = false;
+	});
+}
+
+function loadSwarm() {
+	return getJSON('/swarm').then(function(s) {
+		var rate = num(s.hashrate);
+		$('swarmNow').innerHTML = '<b>' + (rate === null ? '—' : rate.toFixed(0)) +
+			' GH/s</b> across ' + esc(s.alive) + ' of ' + esc(s.count) +
+			' miner' + (s.count === 1 ? '' : 's');
+		$('swarmTable').innerHTML =
+			'<tr><th>Miner</th><th>GH/s</th><th>Clock</th><th>Chips</th>' +
+			'<th>Chip max</th><th>Fan</th><th>Shares</th><th>Uptime</th></tr>' +
+			(s.miners || []).map(function(m) {
+				if (!m.alive) {
+					return '<tr><td>' + esc(m.name || m.host) +
+						'</td><td colspan="7" class="bad">not answering' +
+						(m.error ? ' — ' + esc(String(m.error).slice(0, 60)) : '') +
+						'</td></tr>';
+				}
+				var dash = function(v, suffix) {
+					return v === null || v === undefined ? '—' : esc(v) + (suffix || '');
+				};
+				return '<tr><td>' + esc(m.name || m.host) +
+					(m.stock ? ' <span class="pill">stock</span>' : '') + '</td>' +
+					'<td>' + dash(num(m.hashrate) === null ? null : num(m.hashrate).toFixed(0)) + '</td>' +
+					'<td>' + dash(m.mhz === null ? null : m.mhz, ' MHz') + '</td>' +
+					'<td>' + dash(m.chips) + '</td>' +
+					'<td>' + dash(m.tempMax === null ? null : m.tempMax, ' °C') + '</td>' +
+					'<td>' + dash(m.fanRpm === null ? null : m.fanRpm, ' rpm') + '</td>' +
+					'<td>' + dash(m.accepted) +
+					(num(m.rejected) ? ' / ' + esc(m.rejected) + ' rej' : '') + '</td>' +
+					'<td>' + esc(fmtUptime(num(m.uptime))) + '</td></tr>';
+			}).join('');
+	}).catch(function(ex) {
+		$('swarmTable').innerHTML = '<tr><td>swarm unavailable: ' +
+			esc(ex.message || ex) + '</td></tr>';
+	});
+}
+
 var resizeTimer = null;
 window.addEventListener('resize', function() {
 	// Redraw from the data already held - the geometry changed, not the
@@ -779,6 +1626,7 @@ window.addEventListener('resize', function() {
 	clearTimeout(resizeTimer);
 	resizeTimer = setTimeout(function() {
 		if (currentPage.id === 'history') drawHistory();
+		if (currentPage.id === 'chips') drawChipHistory();
 	}, 180);
 });
 
@@ -963,6 +1811,19 @@ routeFromHash();
 window.addEventListener('hashchange', routeFromHash);
 
 $('powerForm').addEventListener('submit', submitPower);
+$('fanForm').addEventListener('submit', submitFan);
+$('fanModeSel').addEventListener('change', syncFanMode);
+$('clockForm').addEventListener('submit', submitClock);
+$('peerForm').addEventListener('submit', addPeer);
+$('scanBtn').addEventListener('click', scanSubnet);
+// Changing the selection cancels an armed confirmation, so a stray second
+// click cannot land on a different clock than the one that was confirmed.
+$('clockSel').addEventListener('change', function() {
+	if (clockArmed) {
+		disarmClock();
+		$('clockMsg').textContent = '';
+	}
+});
 
 tick();
 setInterval(tick, REFRESH_MS);

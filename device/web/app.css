@@ -64,6 +64,16 @@ h1.brand { margin: 0; display: flex; align-items: center; gap: 11px; }
 	overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
 }
 header .sub { color: var(--text-secondary); font-size: 13px; }
+/* A quiet chip, not a headline. The version matters when someone is filing a
+   bug or checking what a miner is running, and never otherwise, so it reads as
+   metadata next to the model rather than competing with the hashrate. */
+header .ver {
+	font-variant-numeric: tabular-nums;
+	padding: 1px 7px;
+	border: 1px solid var(--border);
+	border-radius: 999px;
+	white-space: nowrap;
+}
 header .spacer { flex: 1 1 auto; }
 .dot {
 	width: 8px; height: 8px; border-radius: 50%;
@@ -244,8 +254,45 @@ h2 {
 }
 .power-form button:hover { background: #22323A; }
 .power-form button[disabled] { opacity: .5; cursor: default; }
+/* The armed state of a control that reboots the miner. Colour alone would not
+   be enough, so the button's own text changes to say what it will do - this
+   just stops it looking like the ordinary Apply it was a moment ago. */
+.power-form button.danger { color: var(--bad); border-color: var(--bad); }
+.power-form button.danger:hover { background: #3A2222; }
+.power-form select {
+	background: var(--bg-primary); color: var(--text-primary);
+	border: 1px solid var(--border); border-radius: 6px;
+	padding: 6px 9px; font: inherit; font-size: 13px;
+}
+.power-form input[type="number"] { width: 80px; font-variant-numeric: tabular-nums; }
+.power-form input[disabled], .power-form select[disabled] { opacity: .45; }
 .power-msg { font-size: 12.5px; margin-top: 8px; min-height: 1em; color: var(--text-secondary); }
 .power-msg.bad { color: var(--bad); }
+
+/* The About tables are label/value, so the first column reads better left
+   aligned than sharing .ptable's right alignment for numeric columns. */
+.ptable th[scope], .ptable td:first-child, .ptable th:first-child { text-align: left; }
+.ptable td.ok { color: var(--accent); }
+.ptable td.bad { color: var(--bad); }
+
+/* Log tails are whitespace-significant and often wider than the card, so they
+   scroll in both directions rather than wrapping - a wrapped log line is
+   harder to read than one you have to scroll to. */
+.logview {
+	margin: 10px 0 0; padding: 10px;
+	background: var(--bg-primary); border: 1px solid var(--border);
+	border-radius: 6px;
+	font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+	font-size: 12px; line-height: 1.45;
+	white-space: pre; overflow: auto; max-height: 60vh;
+}
+.ptable a { color: var(--accent); }
+.ptable button {
+	background: var(--bg-card-alt); color: var(--text-primary);
+	border: 1px solid var(--border); border-radius: 5px;
+	padding: 2px 8px; font: inherit; font-size: 12px; cursor: pointer;
+}
+.ptable button:hover { border-color: var(--accent); color: var(--accent); }
 
 .tablewrap { overflow-x: auto; margin-top: 12px; }
 .ptable { border-collapse: collapse; width: 100%; font-size: 13px; }
