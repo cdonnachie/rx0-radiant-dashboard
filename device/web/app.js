@@ -483,11 +483,16 @@ function renderAboutPage(about) {
 				(r.ok ? 'in band' : 'OUT OF BAND') + '</td></tr>';
 		}).join('');
 
+	// Part and value only. /about still carries `source` for each row - it is
+	// real provenance and the bridge's own comments lean on it - but on screen
+	// "board silkscreen" next to a board name is telling you what you already
+	// assumed. The rows that are genuinely not obvious say so in the note
+	// under the table instead.
 	$('aboutHardware').innerHTML =
-		'<tr><th>Part</th><th>Value</th><th>How it is known</th></tr>' +
+		'<tr><th>Part</th><th>Value</th></tr>' +
 		(about.hardware || []).map(function(h) {
 			return '<tr><td>' + esc(h.label) + '</td><td>' + esc(h.value) +
-				'</td><td>' + esc(h.source) + '</td></tr>';
+				'</td></tr>';
 		}).join('');
 
 	var st = about.storage || {}, sd = about.sd || {};
