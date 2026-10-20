@@ -1937,13 +1937,18 @@ HARDWARE = [
     ('Ethernet', 'IP101GA PHY, HanRun HR911105A magjack', 'chip package markings'),
     # Counted, not read: four L1R0 inductors each with its own uPI power stage.
     ('Chip supply', '4-phase buck', 'counted on the board'),
-    # Deliberately split from the row above, and hedged. The COUNT is solid -
-    # it comes from the EEPROM's chipcount1, which is also what the Hash board
-    # section below reports. The 4x3 ARRANGEMENT is an inference from the board
-    # name and has never been verified; if it holds, the 12 per-chip
-    # temperatures should show an airflow gradient, which nobody has checked.
-    ('Chip layout', '12 chips, probably 4x3',
-     'count from the EEPROM; grid inferred from the board name, unverified'),
+    # No longer an inference. The count comes from the EEPROM's chipcount1,
+    # and the ARRANGEMENT was confirmed from a photograph of the bare board on
+    # 2026-10-20: four groups of three packages - three down the left and three
+    # down the right of the upper block, and the same again below the power
+    # section - which is what the 4X3 in the silkscreen name means.
+    #
+    # This matters for reading the thermal map. The chips are NOT a single
+    # airflow column, so the 4-5 C spread cannot be explained as air warming
+    # as it crosses one row; the groups sit either side of the buck converters
+    # and above and below them. See the thermal-map notes.
+    ('Chip layout', '12 chips in four groups of three',
+     'count from the EEPROM; arrangement confirmed from a photo of the board'),
 ]
 
 # There is deliberately no input-voltage, input-current or power field here:
