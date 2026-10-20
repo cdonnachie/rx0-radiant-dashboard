@@ -1800,8 +1800,18 @@ def write_fan_config(wanted):
     # The service reads its config once, at startup, so a restart is how a
     # change takes effect. It is also the only safe way to change mode: the
     # running loop holds the old setpoint in a shell variable.
+    #
+    # close_fds is NOT optional here, and leaving it off cost a dashboard
+    # outage on 2026-10-20. Python 2 defaults it to False, so the fan daemon
+    # inherited every descriptor this process had open - including the 4112
+    # LISTENING SOCKET. rxd_fanset.sh is long-lived, so from the moment anyone
+    # touched a fan control the socket had a second owner, and it stayed bound
+    # after this bridge exited. Every subsequent restart then died with
+    # EADDRINUSE while the stale listener accepted connections into a backlog
+    # nobody was reading - so the dashboard hung rather than refusing, which
+    # reads like a wedged server instead of a dead one.
     try:
-        subprocess.call([FAN_SERVICE, 'restart'])
+        subprocess.call([FAN_SERVICE, 'restart'], close_fds=True)
     except Exception:
         stored['warning'] = ('config written but the fan service could not be '
                              'restarted; it will pick this up at next boot')
