@@ -78,6 +78,15 @@ HIS_LOG = '/var/order/his.log'
 # Parsing 2 MiB of log on this CPU is not free and the dashboard polls on a
 # timer, so a built response is reused for this long.
 HISTORY_TTL = 60.0
+# A long window is cached for much longer, because the trade is different at
+# each end. A 24-hour chart is cheap to rebuild (~0.5 s) and a minute of new
+# data is a visible slice of it. A 30-day chart costs ~11.6 s - it must read
+# the card's archived run.log and his.log as well as the live pair, which is
+# real work, not duplicated work - and ten more minutes of samples moves
+# nothing a person could see in 43,200. Holding it for a minute meant paying
+# that 11.6 s again on almost every revisit.
+HISTORY_TTL_LONG = 600.0
+HISTORY_LONG_HOURS = 48
 HISTORY_DEFAULT_HOURS = 24
 HISTORY_MAX_HOURS = 24 * 30
 HISTORY_DEFAULT_POINTS = 500
@@ -100,6 +109,16 @@ _history_cache = {}
 CHIP_LOG = '/var/order/rxd_chips.log'
 CHIP_SAMPLE_SECONDS = 300
 CHIP_LOG_MAX = 1024 * 1024      # ~2 weeks; halved in place when it trips
+
+# Recorded operating points - see the section above record_power() for why
+# these exist. Declared up here because DOWNLOAD_LOGS below names POWER_LOG,
+# and that table is built at import time.
+POWER_LOG = '/var/order/rxd_power.log'
+POWER_LOG_MAX = 128 * 1024      # ~1800 rows; halved in place when it trips
+POWER_WATTS_MIN = 1.0
+POWER_WATTS_MAX = 2000.0
+POWER_FIELDS = ('epoch', 'watts', 'gh', 'mhz', 'percent', 'chipMean', 'soc',
+                'fanRatio', 'fanRpm', 'uptimeSeconds')
 
 # --- an SD card, when one is in the slot -------------------------------------
 #
@@ -298,6 +317,17 @@ SOC_IIO = '/sys/bus/iio/devices/iio:device0'
 #     there is a record of what asked for what even though nothing was asked to
 #     prove who it was.
 #
+# OC_LOG LIVES ON NAND, NOT IN /var/log, AND THAT IS THE WHOLE POINT OF IT.
+# It was /var/log/rxdoc.log until 2026-10-18, which is a symlink into tmpfs -
+# so the one log recording a clock change was destroyed by the reboot that
+# every clock change triggers. Structurally it could only ever be read while
+# nothing interesting had happened yet. It cost a real incident: a /setclock
+# returned "rebooting now", did not reboot, left the miner stopped, and the
+# only surviving evidence of the sequence was another daemon's startup line.
+# It is in ARCHIVED_LOGS too, so a card keeps it across a reflash as well.
+# Growth is a line per accepted change - tens of bytes a day at worst - so it
+# needs no cap, unlike the sampled logs beside it.
+#
 # The sequence is the one used by hand all along: pause the miner (it owns the
 # GPIOs), write, resume, reboot. The clock only takes effect on the reboot,
 # because the miner reads the EEPROM at startup and ramps to it itself.
@@ -310,7 +340,7 @@ OC_FLAG_FILES = ('/var/order/conf/rxd_oc.enable',
                  '/var/order/conf/rxd_oc.token')
 EEPROM_READ = '/var/order/eeprom_read.py'
 EEPROM_WRITE = '/var/order/eeprom_write.py'
-OC_LOG = '/var/log/rxdoc.log'
+OC_LOG = '/var/order/rxdoc.log'
 OC_SCL = 980
 OC_SDA = 981
 
@@ -331,6 +361,55 @@ FAN_SERVICE = '/etc/init.d/rxdfan'
 FAN_TARGET_MIN = 40
 FAN_TARGET_MAX = 85
 FAN_FLOOR = 10            # the lowest 'minimum fan' anyone may configure
+
+# --- Our own pages ----------------------------------------------------------
+#
+# The stock UI is appweb + ESP, and everything this project has added to it so
+# far works by styling over markup we do not own: tiles are found by stock CSS
+# classes that name an icon rather than a meaning, content2() rewrites them on
+# every pass so our edits must be re-applied after it, and translate.js puts
+# the Chinese labels back on anything still carrying `lan-trans`.
+#
+# Serving our own pages from here instead costs one directory and the handler
+# below, and it buys markup we control outright. The decisive reason to do it
+# HERE rather than by replacing the stock `web/` directory in the bg package is
+# that the stock UI then stays up, untouched, on port 80: if a page we ship is
+# broken, the machine still has a working interface and a working firmware
+# uploader. On a box whose recovery path is a UART header, not breaking the
+# fallback is worth more than the tidiness of having one UI.
+#
+# No authentication, deliberately and consistently: appweb.conf sets
+# `AuthType none` on its own document route and the stock API answers config
+# writes to anything on the LAN, so a login here would guard a door that
+# stands open beside it. Keeping the miner off the open internet is the
+# control that matters. See the note above /setfan, which says the same thing.
+WEB_ROOT = '/var/order/web'
+WEB_INDEX = 'index.html'
+WEB_TYPES = {
+    '.html': 'text/html; charset=utf-8',
+    '.css': 'text/css; charset=utf-8',
+    '.js': 'application/javascript; charset=utf-8',
+    '.json': 'application/json',
+    '.svg': 'image/svg+xml',
+    '.png': 'image/png',
+    '.ico': 'image/x-icon',
+    '.woff2': 'font/woff2',
+}
+
+
+def web_file(rel):
+    """Resolve a request path to a file under WEB_ROOT, or None.
+
+    Containment is checked against the REALPATH of both sides, so neither
+    '..' nor a symlink planted inside the web root can escape it. An empty
+    path means the index rather than the directory itself.
+    """
+    rel = rel.lstrip('/') or WEB_INDEX
+    root = os.path.realpath(WEB_ROOT)
+    full = os.path.realpath(os.path.join(root, rel))
+    if full != root and not full.startswith(root + os.sep):
+        return None
+    return full if os.path.isfile(full) else None
 
 # --- Expected hashrate ------------------------------------------------------
 #
@@ -356,6 +435,14 @@ CORE_COMMAND = '{"id":"getcorestate"}'
 EXPECTED_CONF = '/var/order/conf/rxd_expected.conf'
 HASHES_PER_CORE_CYCLE = 3.0
 
+# NEITHER hashrate figure is instantaneous, and saying so matters more than it
+# looks. rtpow is what the miner's own home page labels "5 mins Hashrate", so
+# two samples taken a minute apart share four fifths of their averaging window
+# and are NOT independent measurements - repeating a reading proves the board
+# is steady, it does not reduce the noise on the number. Anyone screening a
+# clock change needs that, so the window is reported rather than implied.
+HASHRATE_WINDOWS = {'5min': 300, '30min': 1800}
+
 # --- Swarm ------------------------------------------------------------------
 #
 # One dashboard showing every RX0 on the network. The fan-out happens HERE, in
@@ -372,6 +459,27 @@ SWARM_TIMEOUT = 4.0       # per peer; a sleeping miner must not stall the page
 SWARM_MAX_PEERS = 32
 SCAN_TIMEOUT = 0.4        # per host, during a subnet scan
 SCAN_WORKERS = 24
+
+# The stock panel on THIS box gets its own budget, deliberately not
+# SWARM_TIMEOUT. The two look like the same call but have opposite
+# requirements: a remote peer that does not answer in 4 s must be abandoned,
+# because /swarm waits on every peer thread (SWARM_TIMEOUT + 1.0) before it can
+# render anything. The loopback panel is not abandonable - it is the only thing
+# that knows the share counts - and it is slow for a reason that has nothing to
+# do with the network: appweb builds that payload by querying the miner's
+# command port, so it inherits whatever queue is already on 4111.
+#
+# Measured on this box, serially, with nothing else running: 14 fetches of
+# /pool, mean 2.01 s, worst 2.86 s - 71% of a 4 s budget spent on a good day.
+# Under the page's own tick(), which fires /performance /chipinfo /fan /about
+# /pool together through Promise.all, three of those are queued on 4111 ahead
+# of appweb's own query and the panel fetch blows straight through 4 s. That is
+# the intermittent `503 {"error": "timed out"}` on /pool: reproduced at 2
+# failures in 40 concurrent requests against 0 in 40 serial ones.
+PANEL_TIMEOUT = 8.0       # loopback panel; ~2.8x the worst observed fetch
+# Shorter than the page's 10 s refresh, so every tick still gets a fresh panel
+# and the TTL only ever collapses duplicate asks WITHIN one tick.
+PANEL_TTL = 5.0
 
 
 # Every command this bridge may send. All getters, no setters: the fan ratio is
@@ -609,12 +717,74 @@ def _log_lines(path):
         f.close()
 
 
+def _first_stamp(path, window=4096):
+    """The oldest epoch in a chronological log, read from its head.
+
+    Only the head: these files run to a couple of megabytes and the answer is
+    in the first line or two. his.log's first line is severed mid-timestamp by
+    the firmware's front trim, so this has to tolerate a fragment before the
+    first whole stamp rather than giving up on it.
+    """
+    try:
+        handle = open(path, 'rb')
+        try:
+            text = handle.read(window)
+        finally:
+            handle.close()
+    except (IOError, OSError):
+        return None
+
+    for line in text.splitlines():
+        found = TS_RE.match(line)
+        if found:
+            try:
+                return _epoch(found.group(1))
+            except ValueError:
+                continue
+    return None
+
+
+def history_log_paths(cutoff):
+    """Which logs to parse for a window reaching back to `cutoff`.
+
+    The live pair is always read. The card's archives are added only when the
+    window reaches further back than the live files still hold - they are the
+    larger files by some way, and the ordinary 24-hour view must not pay to
+    read a fortnight it has no use for.
+
+    Order does not affect correctness: the series below are dicts keyed by
+    epoch, so a line read from both the archive and the live file overwrites
+    itself with the same value. Live is still read last, so it wins any
+    disagreement.
+    """
+    live = [RUN_LOG, HIS_LOG]
+
+    oldest = None
+    for path in live:
+        stamp = _first_stamp(path)
+        if stamp is not None and (oldest is None or stamp < oldest):
+            oldest = stamp
+    if oldest is not None and cutoff >= oldest:
+        return live                 # the window fits inside what NAND holds
+
+    sd = sd_log_dir()
+    if not sd:
+        return live
+    folder = os.path.join(sd, ARCHIVE_DIR_NAME)
+    archived = [os.path.join(folder, os.path.basename(p)) for p in live]
+    return [p for p in archived if os.path.exists(p)] + live
+
+
 def parse_logs(cutoff):
-    """Pull the charted series out of both logs, newest cutoff onward.
+    """Pull the charted series out of the logs, newest cutoff onward.
 
     his.log holds what rolled over from previous boots and run.log the current
     one, so they are read in that order; timestamps are sorted afterwards
     because the two can overlap by a line or two around a restart.
+
+    For a window older than the live files go back, the card's archived copies
+    are read as well - they keep what the firmware's 2 MiB front trim threw
+    away and what every reboot wiped from run.log.
     """
     total = {}        # epoch -> GH/s, whole miner
     boards = {}       # board -> {'hashrate'|'chiptemp'|'pcbtemp1'|'pcbtemp2': {epoch: value}}
@@ -629,7 +799,7 @@ def parse_logs(cutoff):
     # fortnight of log then touches a fraction of the lines. The cheap
     # substring test comes before anything else because most of what is in
     # here is kernel boot spew with no timestamp at all.
-    for path in (RUN_LOG, HIS_LOG):
+    for path in history_log_paths(cutoff):
         for line in reversed(_log_lines(path)):
             if 'Hashrate' in line:
                 kind = 'hash'
@@ -704,7 +874,29 @@ def history(hours, points):
         return cached[1]
 
     cutoff = time.time() - hours * 3600
-    total, boards, fans = parse_logs(cutoff)
+
+    # The compact series first. When it reaches back past the cutoff it is the
+    # whole answer and the text logs are never opened - which is the point of
+    # keeping it. Otherwise the logs fill in the older part and the series is
+    # merged over the top; both are keyed by the miner's own timestamps, so a
+    # point present in both is one point.
+    oldest, _newest = _series_stamp_range()
+    covered = oldest is not None and cutoff >= oldest
+    series = parse_series(cutoff)
+
+    if covered:
+        sources = series_log_sources()
+        total, boards, fans = series
+    else:
+        sources = history_log_paths(cutoff) + series_log_sources()
+        total, boards, fans = parse_logs(cutoff)
+        s_total, s_boards, s_fans = series
+        total.update(s_total)
+        fans.update(s_fans)
+        for number, named in s_boards.items():
+            into = boards.setdefault(number, {})
+            for name, values in named.items():
+                into.setdefault(name, {}).update(values)
 
     payload = {
         'hours': hours,
@@ -714,7 +906,10 @@ def history(hours, points):
             'fan': 'RPM',
             't': 'epoch milliseconds, device clock (UTC)',
         },
-        'source': [p for p in (HIS_LOG, RUN_LOG) if os.path.exists(p)],
+        # The files actually parsed for THIS window, not a fixed pair: a deep
+        # window reads the card's archives too, and a diagnostic field that
+        # says otherwise is worse than no field at all.
+        'source': [p for p in sources if os.path.exists(p)],
         'hashrate': _points(total, points),
         'fans': [[int(t * 1000), v[0], v[1]]
                  for t, v in _thin(sorted(fans.items()), points)],
@@ -724,7 +919,8 @@ def history(hours, points):
         ),
     }
 
-    _history_cache[key] = (time.time() + HISTORY_TTL, payload)
+    ttl = HISTORY_TTL if hours <= HISTORY_LONG_HOURS else HISTORY_TTL_LONG
+    _history_cache[key] = (time.time() + ttl, payload)
     return payload
 
 
@@ -921,6 +1117,215 @@ def record_chip_sample():
     trim_chip_log()
 
 
+# --- a compact copy of the series the charts are built from --------------------
+#
+# /history is drawn from numbers the firmware writes as prose - "30 mins
+# Hashrate 313.21G", "HashBoard 1 || PCB temp1 || temp 69C" - so every request
+# re-derives them with regex over megabytes of text. Measured on this machine:
+# 0.55s for 24 hours, 2.3s for a week, 9.97s for a month.
+#
+# This keeps a materialised copy. Not a database: there is no sqlite3 in this
+# python, and an append-only file survives the abrupt power loss and the card
+# being pulled mid-write that this machine actually does - where a torn page in
+# an un-journalled DB loses the lot. The win is the same one a DB would give,
+# which is not having to parse prose to draw a line.
+#
+# Rows carry the MINER'S OWN timestamp, not the moment we transcribed them.
+# That is what makes this safe to merge with the text logs: a row here and the
+# line it came from are the same point, so reading both counts it once.
+SERIES_LOG = '/var/order/rxd_series.log'
+SERIES_LOG_NAME = 'rxd_series.log'
+SERIES_LOG_MAX = 1024 * 1024
+SERIES_TAIL = 65536        # of run.log to re-read each pass; ~1.5 h of log
+
+
+def series_log_target():
+    """Card if there is one, else NAND - same rule as the chip log."""
+    folder = sd_log_folder()
+    return os.path.join(folder, SERIES_LOG_NAME) if folder else SERIES_LOG
+
+
+def series_log_sources():
+    """Every store to read the series from, NAND first."""
+    paths = [SERIES_LOG]
+    sd = sd_log_dir()
+    if sd:
+        paths.append(os.path.join(sd, ARCHIVE_DIR_NAME, SERIES_LOG_NAME))
+    return [p for p in paths if os.path.exists(p)]
+
+
+def _series_stamp_range():
+    """(oldest, newest) miner epoch already transcribed, across both stores."""
+    oldest = newest = None
+    for path in series_log_sources():
+        first = None
+        try:
+            handle = open(path)
+            try:
+                head = handle.read(4096)
+            finally:
+                handle.close()
+        except (IOError, OSError):
+            continue
+        for line in head.split('\n'):
+            bits = line.split()
+            if bits and bits[0].isdigit():
+                first = int(bits[0])
+                break
+        last = _chip_last_stamp(path)
+        if first is not None and (oldest is None or first < oldest):
+            oldest = first
+        if last is not None and (newest is None or last > newest):
+            newest = last
+    return oldest, newest
+
+
+def _scan_run_log(newer_than):
+    """{epoch: row} built from the tail of run.log, newest lines only.
+
+    Only the tail is read - the point of this whole file is to stop reading
+    megabytes - which means a bridge that was down for hours leaves a gap. That
+    is deliberate and harmless: the text logs still cover it, and history()
+    falls back to them for any window the series does not reach.
+    """
+    try:
+        size = os.path.getsize(RUN_LOG)
+        handle = open(RUN_LOG)
+        try:
+            if size > SERIES_TAIL:
+                handle.seek(size - SERIES_TAIL)
+            text = handle.read()
+        finally:
+            handle.close()
+    except (IOError, OSError):
+        return {}
+
+    rows = {}
+
+    def row(when, board):
+        key = (when, board)
+        return rows.setdefault(key, {'hash': '-', 'chiptemp': '-', 'pcb1': '-',
+                                     'pcb2': '-', 'fan1': '-', 'fan2': '-',
+                                     'total': '-'})
+
+    for line in text.split('\n'):
+        found = TS_RE.match(line)
+        if not found:
+            continue
+        try:
+            when = int(_epoch(found.group(1)))
+        except ValueError:
+            continue
+        if newer_than is not None and when <= newer_than:
+            continue
+        rest = line[found.end():]
+
+        hit = HASH_RE.search(rest)
+        if hit:
+            value = round(float(hit.group(2)) *
+                          SCALE.get((hit.group(3) or 'G').upper(), 1.0), 3)
+            if hit.group(1):
+                row(when, hit.group(1))['hash'] = value
+            else:
+                row(when, '-')['total'] = value
+            continue
+
+        hit = FAN_RE.search(rest)
+        if hit:
+            entry = row(when, '-')
+            entry['fan1'], entry['fan2'] = int(hit.group(1)), int(hit.group(2))
+            continue
+
+        hit = CHIPTEMP_RE.search(rest)
+        if hit:
+            row(when, hit.group(1))['chiptemp'] = int(hit.group(2))
+            continue
+
+        hit = PCBTEMP_RE.search(rest)
+        if hit:
+            row(when, hit.group(1))['pcb' + hit.group(2)] = int(hit.group(3))
+    return rows
+
+
+def record_series_sample():
+    """Transcribe anything new in run.log into the compact series file."""
+    _, newest = _series_stamp_range()
+    rows = _scan_run_log(newest)
+    if not rows:
+        return 0
+
+    lines = []
+    for (when, board) in sorted(rows):
+        r = rows[(when, board)]
+        lines.append('%d %s %s %s %s %s %s %s %s' % (
+            when, board, r['hash'], r['chiptemp'], r['pcb1'], r['pcb2'],
+            r['fan1'], r['fan2'], r['total']))
+
+    target = series_log_target()
+    try:
+        with open(target, 'a') as handle:
+            handle.write('\n'.join(lines) + '\n')
+    except IOError:
+        if target == SERIES_LOG:
+            return 0
+        try:
+            with open(SERIES_LOG, 'a') as handle:
+                handle.write('\n'.join(lines) + '\n')
+        except IOError:
+            return 0
+
+    # Only the NAND copy is capped, as with the chip log.
+    try:
+        if os.path.getsize(SERIES_LOG) > SERIES_LOG_MAX:
+            with open(SERIES_LOG) as handle:
+                kept = handle.readlines()
+            with open(SERIES_LOG, 'w') as handle:
+                handle.writelines(kept[len(kept) // 2:])
+    except (IOError, OSError):
+        pass
+    return len(lines)
+
+
+def parse_series(cutoff):
+    """(total, boards, fans) from the compact series, same shape as parse_logs."""
+    total, boards, fans = {}, {}, {}
+
+    def board_series(number, name):
+        return boards.setdefault(str(number), {}).setdefault(name, {})
+
+    for path in series_log_sources():
+        try:
+            handle = open(path)
+        except IOError:
+            continue
+        try:
+            for line in handle:
+                bits = line.split()
+                if len(bits) != 9 or not bits[0].isdigit():
+                    continue
+                when = int(bits[0])
+                if when < cutoff:
+                    continue
+                board = bits[1]
+                if bits[8] != '-':
+                    total[when] = float(bits[8])
+                if bits[6] != '-' and bits[7] != '-':
+                    fans[when] = [int(bits[6]), int(bits[7])]
+                if board == '-':
+                    continue
+                if bits[2] != '-':
+                    board_series(board, 'hashrate')[when] = float(bits[2])
+                if bits[3] != '-':
+                    board_series(board, 'chiptemp')[when] = int(bits[3])
+                if bits[4] != '-':
+                    board_series(board, 'pcbtemp1')[when] = int(bits[4])
+                if bits[5] != '-':
+                    board_series(board, 'pcbtemp2')[when] = int(bits[5])
+        finally:
+            handle.close()
+    return total, boards, fans
+
+
 # --- archiving the logs that do not survive -----------------------------------
 #
 # Three different ways these files lose data, and a card fixes all three:
@@ -941,6 +1346,7 @@ def record_chip_sample():
 ARCHIVED_LOGS = [
     '/var/order/run.log',
     '/var/order/his.log',
+    OC_LOG,                       # on NAND, so this is for a reflash, not a reboot
     '/var/log/rxdbridge.log',
     '/var/log/rxdfan.log',
     '/var/log/rxdweb.log',
@@ -1223,6 +1629,12 @@ DOWNLOAD_LOGS = [
      '/var/order/his.log', 'nand'),
     ('rxd_chips.log', 'Per-chip temperature, voltage and clock samples.',
      CHIP_LOG, 'nand'),
+    ('rxd_series.log', 'Hashrate, temperatures and fans, as the charts use them.',
+     SERIES_LOG, 'nand'),
+    ('rxd_power.log', 'Recorded operating points: wall watts against hashrate.',
+     POWER_LOG, 'nand'),
+    ('rxdoc.log', 'Clock changes: what was asked for, by whom, and when.',
+     OC_LOG, 'nand'),
     ('rxdbridge.log', 'This bridge\'s own output.',
      '/var/log/rxdbridge.log', 'ram'),
     ('rxdfan.log', 'Fan controller decisions and the temperature behind each.',
@@ -1320,6 +1732,14 @@ def chip_sampler():
         # Same timer, because both exist to preserve history and neither is
         # urgent. Guarded separately: failing to archive must not cost a chip
         # sample.
+        # Transcribing the miner's prose into the compact series is guarded on
+        # its own too: it is a convenience for /history, and must never cost a
+        # chip sample or an archive pass.
+        try:
+            record_series_sample()
+        except Exception:
+            pass
+
         try:
             note_card_state()
             archive_logs()
@@ -1823,6 +2243,34 @@ def _search_int(pattern, text):
     return int(found.group(1)) if found else None
 
 
+def _fan_rpm(text):
+    """The fastest tachometer reading in a `fan` reply, or None if it has none.
+
+    The MAXIMUM across the array, not slot 0. Below about 19% duty the fan
+    turns too slowly for the miner's pulse counter, so most polls read zero -
+    and the occasional non-zero reading does not stay in the same slot. Six
+    consecutive polls at 10% duty on 2026-10-18, three seconds apart:
+
+        [625,0,0,0]  [0,0,0,0]  [0,491,0,0]  [0,0,0,0]  [0,0,0,0]  [804,0,0,0]
+
+    Reading slot 0 alone therefore reported "0" while a fan was demonstrably
+    turning, and the dashboard's Fan tile flickered between 581, 134 and
+    nothing while the stock page showed 670 beside it. The question this
+    number answers is "are the fans turning?", and any slot saying yes
+    answers it.
+
+    An all-zero reply still returns 0, not None: "the tach cannot see it" and
+    "the miner did not answer" are different states and the page distinguishes
+    them - zero prints the duty percentage and names the tach floor, None
+    prints a dash.
+    """
+    found = re.search(r'"fans":\s*\[([^\]]*)\]', text)
+    if not found:
+        return None
+    values = [int(v) for v in re.findall(r'\d+', found.group(1))]
+    return max(values) if values else None
+
+
 def fan_state():
     """What the fan is doing right now, as opposed to what it was asked to do.
     Both are shown in the UI because they disagree whenever the miner has
@@ -1833,7 +2281,7 @@ def fan_state():
     except Exception:
         pass
     try:
-        state['rpm'] = _search_int(r'"fans":\s*\[(\d+)', query_miner(FAN_COMMAND))
+        state['rpm'] = _fan_rpm(query_miner(FAN_COMMAND))
     except Exception:
         pass
     return state
@@ -1898,8 +2346,13 @@ def hashrate_value(text):
 
 
 def live_hashrate():
-    """The miner's real-time figure, which is what its own home page shows as
-    "5 mins Hashrate". Returns None if the miner will not say."""
+    """The miner's own figure, read live from it over the command port.
+
+    "Live" is about the SOURCE, not the averaging: this is what the miner's
+    home page labels "5 mins Hashrate", a five-minute trailing average. It is
+    fully formed about five minutes after a restart, which is why an 11-minute
+    screen works, but see HASHRATE_WINDOWS for what that costs in independence
+    between samples. Returns None if the miner will not say."""
     try:
         reply = json.loads(query_miner(POW_COMMAND))
     except Exception:
@@ -1939,12 +2392,13 @@ def performance():
     # Live first. The log figure is a 30-minute trailing average and comparing
     # it against a steady-state expectation reads as a fault during a ramp.
     actual = live_hashrate()
-    window = 'live'
+    window = '5min'
     if actual is None:
         actual = recent_hashrate()
         window = '30min' if actual is not None else None
-    report = {'actual': actual, 'window': window, 'cores': None,
-              'mhz': None, 'expected': None, 'percent': None,
+    report = {'actual': actual, 'window': window,
+              'windowSeconds': HASHRATE_WINDOWS.get(window),
+              'cores': None, 'mhz': None, 'expected': None, 'percent': None,
               'hashesPerCoreCycle': hashes_per_cycle()}
     # The chips come first: their numbers are what tells core_count which of
     # getcorestate's 36 slots are real. Without them it counts three boards'
@@ -2007,17 +2461,56 @@ def write_peers(entries):
     return peers()
 
 
-def stock_panel(host):
+def stock_panel(host, timeout=SWARM_TIMEOUT):
     """The stock web UI's home-page payload for a miner at `host`.
 
     It answers with NO session - the stock API has no authentication at all -
     which is what lets a factory miner appear in the swarm before it has this
     firmware on it. Raises on any failure; callers decide what that means.
+
+    The default budget is the per-peer one. For this box use local_panel(),
+    which spends PANEL_TIMEOUT instead and does not re-ask needlessly.
     """
     raw = urllib2.urlopen('http://%s/user/userpanel' % host,
-                          'post=4', timeout=SWARM_TIMEOUT).read()
+                          'post=4', timeout=timeout).read()
     data = json.loads(raw)
     return data.get('data', data)
+
+
+_panel_cache = [0.0, None]              # expiry, payload
+_PANEL_LOCK = threading.Lock()
+
+
+def local_panel():
+    """This box's stock panel, fetched at most once per PANEL_TTL.
+
+    Every consumer of the share counts comes through here - /pool directly,
+    /summary via local_shares(), and /swarm when this miner is its own peer -
+    and the page can have several of them in flight at once. Two things make
+    that expensive, and this fixes both.
+
+    The fetch is deduplicated, so overlapping callers inside one page tick pay
+    for one appweb round trip rather than one each.
+
+    The lock is held ACROSS the fetch, which is the unusual part and is the
+    point: a second caller waits for the first one's answer instead of starting
+    a competing request. Overlapping panel fetches are slower than sequential
+    ones here, because appweb serves them by querying the miner's command port
+    and that port takes callers one at a time - so racing adds queue depth to
+    the very thing being waited on. Serialising two fetches costs one fetch;
+    racing them can cost both a timeout.
+
+    Raises, like stock_panel. A failure is never cached: the stale payload is
+    left in place with its expiry already passed, so the next caller re-asks.
+    """
+    with _PANEL_LOCK:
+        expiry, payload = _panel_cache
+        if payload is not None and expiry > time.time():
+            return payload
+        payload = stock_panel('127.0.0.1', PANEL_TIMEOUT)
+        _panel_cache[0] = time.time() + PANEL_TTL
+        _panel_cache[1] = payload
+        return payload
 
 
 def shares_from_panel(data):
@@ -2034,9 +2527,62 @@ def shares_from_panel(data):
 def local_shares():
     """Accepted and rejected, from the miner's own web API on this box."""
     try:
-        return shares_from_panel(stock_panel('127.0.0.1'))
+        return shares_from_panel(local_panel())
     except Exception:
         return {'accepted': None, 'rejected': None, 'pool': None}
+
+
+def _split_pool_user(user):
+    """The stock pool user is 'wallet.worker'.
+
+    The worker half is what identifies the machine and belongs on screen; the
+    wallet is a payout address, and a dashboard does not need it at full
+    length to tell you which account you are mining to. Shortened rather than
+    hidden - you still want to notice if it is the WRONG wallet.
+    """
+    text = str(user or '')
+    wallet, _, worker = text.rpartition('.')
+    if not wallet:
+        wallet, worker = text, ''
+    short = wallet if len(wallet) <= 12 else (wallet[:6] + '...' + wallet[-4:])
+    return short, worker
+
+
+def pool_status():
+    """Pools, share counts and which one is actually connected.
+
+    Straight off the stock web API on this box, which is the only thing that
+    knows: the miner's command port reports chips and clocks, not stratum.
+    `runtime` comes back too - that is the MINER's own uptime rather than the
+    system's, which is the better clock for anything asking how long this
+    board has been hashing.
+    """
+    data = local_panel()
+    pools, live = [], None
+    for entry in (data.get('pools') or []):
+        addr = entry.get('addr') or ''
+        if not addr:
+            continue
+        wallet, worker = _split_pool_user(entry.get('user'))
+        accepted = int(entry.get('accepted') or 0)
+        rejected = int(entry.get('rejected') or 0)
+        submitted = accepted + rejected
+        row = {'no': int(entry.get('no') or 0),
+               'addr': addr,
+               'wallet': wallet,
+               'worker': worker,
+               'priority': int(entry.get('priority') or 0),
+               # connect is 1 for the live pool and -1 for an unused slot.
+               'connected': int(entry.get('connect') or -1) == 1,
+               'accepted': accepted,
+               'rejected': rejected,
+               'difficulty': entry.get('diff'),
+               'rejectRate': (round(100.0 * rejected / submitted, 3)
+                              if submitted else None)}
+        pools.append(row)
+        if row['connected'] and live is None:
+            live = row
+    return {'pools': pools, 'live': live, 'runtime': data.get('runtime')}
 
 
 def uptime_seconds():
@@ -2236,6 +2782,146 @@ def scan(prefix):
             'new': sorted(host for host in found if host not in known)}
 
 
+# --- recorded operating points ----------------------------------------------
+#
+# There is NO power sensor on this board - nothing on the bit-banged I2C bus,
+# no input rail on the XADC - so wall watts can only come from a person with a
+# meter. Every efficiency question this project has asked (775 against 800,
+# fan low against fan high, warm against cool) was a GH/W comparison assembled
+# by hand from numbers scattered through a session, and then thrown away.
+#
+# So when someone types a reading, snapshot everything the bridge already
+# knows and keep the row. Plain text, one line per point, for the same reasons
+# as the chip log: ~70 bytes, greppable over SSH, and downloadable through
+# /logfile without inventing a new mechanism.
+#
+# uptimeSeconds is recorded because it is the field that decides whether two
+# rows are comparable at all. This board's hashrate climbs for about an hour
+# after a restart, so a point taken at 17 minutes and one taken at 8 hours are
+# different measurements however alike the watts look - that mistake has
+# already been made twice here.
+def _power_fmt(value):
+    """One field. Never %g: it carries six significant figures, which turns an
+    epoch into 1.79232e+09 and silently destroys the timestamp."""
+    if value is None:
+        return '-'
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return '-'
+    return '%d' % int(number) if number == int(number) else '%.2f' % number
+
+
+def _power_num(text):
+    if text in ('-', ''):
+        return None
+    try:
+        number = float(text)
+    except ValueError:
+        return None
+    return int(number) if number == int(number) else number
+
+
+def power_line(row):
+    fields = [_power_fmt(row.get(key)) for key in POWER_FIELDS]
+    note = row.get('note') or ''
+    return ' '.join(fields) + ((' ' + note) if note else '')
+
+
+def power_snapshot(watts, note=''):
+    """This operating point, as the bridge sees it right now.
+
+    Every lookup is individually guarded: a miner mid-restart should still
+    record the watts the person just read off the meter, with the fields it
+    could not supply left null, rather than refusing the whole row.
+    """
+    row = {'epoch': int(time.time()), 'watts': float(watts),
+           'note': re.sub(r'\s+', ' ', str(note or '')).strip()[:80]}
+    try:
+        perf = performance()
+        row['gh'] = perf.get('actual')
+        row['mhz'] = perf.get('mhz')
+        row['percent'] = perf.get('percent')
+    except Exception:
+        pass
+    try:
+        chips = summarise(query_miner(CHIP_COMMAND), board_profiles())
+        temps = [float(c['temp']) for c in (chips.get('chips') or [])
+                 if c.get('temp') is not None]
+        if temps:
+            row['chipMean'] = round(sum(temps) / len(temps), 2)
+        row['soc'] = chips.get('soc')
+    except Exception:
+        pass
+    try:
+        state = fan_state()
+        row['fanRatio'] = state.get('ratio')
+        row['fanRpm'] = state.get('rpm')
+    except Exception:
+        pass
+    try:
+        row['uptimeSeconds'] = uptime_seconds()
+    except Exception:
+        pass
+    if row.get('gh') and row['watts']:
+        row['ghPerW'] = round(row['gh'] / row['watts'], 3)
+    return row
+
+
+def read_power_log(limit=500):
+    rows = []
+    try:
+        handle = open(POWER_LOG)
+    except (IOError, OSError):
+        return rows
+    try:
+        lines = handle.readlines()
+    finally:
+        handle.close()
+
+    width = len(POWER_FIELDS)
+    for line in lines[-limit:]:
+        bits = line.rstrip('\n').split(' ', width)
+        if len(bits) < width:
+            continue            # truncated or foreign line; skip, never fatal
+        row = dict(zip(POWER_FIELDS, [_power_num(b) for b in bits[:width]]))
+        if row.get('epoch') is None or row.get('watts') is None:
+            continue
+        row['note'] = bits[width].strip() if len(bits) > width else ''
+        if row.get('gh') and row.get('watts'):
+            row['ghPerW'] = round(row['gh'] / row['watts'], 3)
+        rows.append(row)
+    return rows
+
+
+def trim_power_log():
+    """Keep the newest half when the file outgrows POWER_LOG_MAX."""
+    try:
+        if os.path.getsize(POWER_LOG) < POWER_LOG_MAX:
+            return
+        with open(POWER_LOG) as handle:
+            lines = handle.readlines()
+        with open(POWER_LOG, 'w') as handle:
+            handle.writelines(lines[len(lines) // 2:])
+    except (IOError, OSError):
+        pass
+
+
+def record_power(watts, note=''):
+    try:
+        value = float(watts)
+    except (TypeError, ValueError):
+        raise ValueError('watts must be a number')
+    if value != value or value < POWER_WATTS_MIN or value > POWER_WATTS_MAX:
+        raise ValueError('watts must be between %g and %g'
+                         % (POWER_WATTS_MIN, POWER_WATTS_MAX))
+    row = power_snapshot(value, note)
+    with open(POWER_LOG, 'a') as handle:
+        handle.write(power_line(row) + '\n')
+    trim_power_log()
+    return row
+
+
 class Handler(BaseHTTPRequestHandler):
     protocol_version = 'HTTP/1.1'
 
@@ -2288,10 +2974,58 @@ class Handler(BaseHTTPRequestHandler):
         finally:
             handle.close()
 
+    def _send_web(self, full):
+        """Serve one file out of WEB_ROOT.
+
+        Content-Length is honoured exactly for the same reason _send_file
+        does it: HTTP/1.1 keep-alive means a byte out of step corrupts the
+        NEXT response on the connection, not this one, which is a horrible
+        thing to debug from a browser.
+        """
+        try:
+            size = os.path.getsize(full)
+            handle = open(full, 'rb')
+        except (IOError, OSError), ex:
+            self._send(404, {'error': str(ex)})
+            return
+
+        ext = os.path.splitext(full)[1].lower()
+        try:
+            self.send_response(200)
+            self.send_header('Content-Type',
+                             WEB_TYPES.get(ext, 'application/octet-stream'))
+            self.send_header('Content-Length', str(size))
+            # no-store so a dashboard cannot outlive the bridge that serves
+            # it. These are a few KB over a LAN; there is nothing to save.
+            self.send_header('Cache-Control', 'no-store')
+            self.end_headers()
+
+            sent = 0
+            while sent < size:
+                chunk = handle.read(min(65536, size - sent))
+                if not chunk:
+                    break               # truncated under us
+                self.wfile.write(chunk)
+                sent += len(chunk)
+            if sent < size:
+                self.wfile.write('\0' * (size - sent))
+        finally:
+            handle.close()
+
     def do_GET(self):
         parts = urlparse.urlparse(self.path)
         path = parts.path.rstrip('/')
         query = urlparse.parse_qs(parts.query)
+
+        # The bare root served /chipinfo before this bridge had pages of its
+        # own. It still does on an install with no web assets, so deploying
+        # the bridge without them changes nothing for anything already
+        # pointed at it; where a page IS installed, the root is the page.
+        if path == '':
+            page = web_file('/')
+            if page:
+                self._send_web(page)
+                return
 
         if path in ('/chipinfo', ''):
             try:
@@ -2391,6 +3125,29 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(503, {'error': str(ex)})
             return
 
+        if path == '/pool':
+            # 503 rather than an empty shape: unlike the power log, "no pool
+            # data" is never a legitimate state here - it means the stock API
+            # did not answer, and a page showing zero accepted shares when it
+            # simply could not ask would be worse than showing nothing.
+            try:
+                self._send(200, pool_status())
+            except Exception, ex:
+                self._send(503, {'error': str(ex)})
+            return
+
+        if path == '/power':
+            # Recorded operating points. Reading never fails: an absent log
+            # means nobody has recorded one yet, which is an empty list and
+            # not an error.
+            try:
+                self._send(200, {'points': read_power_log(),
+                                 'wattsMin': POWER_WATTS_MIN,
+                                 'wattsMax': POWER_WATTS_MAX})
+            except Exception, ex:
+                self._send(503, {'error': str(ex)})
+            return
+
         if path == '/summary':
             # What peers fetch from each other. Never fails outright: a miner
             # that is mid-reboot should still return a row saying it is down.
@@ -2412,6 +3169,13 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(200, {'peers': peers(), 'max': SWARM_MAX_PEERS})
             except Exception, ex:
                 self._send(503, {'error': str(ex)})
+            return
+
+        # Static last, so a file can never shadow an endpoint: every API path
+        # above is matched before the web root is consulted.
+        page = web_file(path)
+        if page:
+            self._send_web(page)
             return
 
         self._send(404, {'error': 'not found'})
@@ -2470,6 +3234,24 @@ class Handler(BaseHTTPRequestHandler):
                 return
             try:
                 self._send(200, {'ok': True, 'fan': write_fan_config(body)})
+            except ValueError, ex:
+                self._send(400, {'error': str(ex)})
+            except Exception, ex:
+                self._send(500, {'error': str(ex)})
+            return
+
+        if path == '/power':
+            # Append one operating point. The only thing the caller supplies
+            # is the meter reading; everything else is read here, so a row
+            # cannot describe a machine state that was never true.
+            try:
+                body = self._body()
+            except (ValueError, TypeError):
+                self._send(400, {'error': 'malformed request'})
+                return
+            try:
+                point = record_power(body.get('watts'), body.get('note'))
+                self._send(200, {'ok': True, 'point': point})
             except ValueError, ex:
                 self._send(400, {'error': str(ex)})
             except Exception, ex:
@@ -2609,6 +3391,54 @@ def serve_tls():
     return server
 
 
+TIME_SERVERS = ('time.nist.gov', 'pool.ntp.org', 'time.cloudflare.com')
+
+
+def sync_clock():
+    """Set the system clock at startup. Best effort; never fatal.
+
+    This box has NO RTC - /dev/rtc* does not exist - and no NTP client of any
+    kind: no ntpd, ntpdate, chronyd or sntp binary, no config, no init script.
+    So nothing sets the clock and nothing holds it across a power cut. On boot
+    it comes up re-seeded from a stale saved timestamp, which is why epochs are
+    not monotonic across reboots and why hour labels from different runs
+    collide (see the history parsing notes).
+
+    Measured 2026-10-20: the clock was 33.2 h behind true UTC, so the dashboard
+    showed a point recorded seconds earlier as "33 h ago" and dated it two days
+    back.
+
+    busybox ships an `rdate` applet, and RFC 868 time servers still answer on
+    port 37, so the fix needs nothing installed. Several servers are tried
+    because this runs at boot, when the network may not be up yet.
+
+    Deliberately not fatal: a miner that cannot reach a time server must still
+    mine and still serve this dashboard. A wrong clock is a reporting problem,
+    not an operational one.
+    """
+    before = time.time()
+    for server in TIME_SERVERS:
+        try:
+            rc = subprocess.call(['busybox', 'rdate', '-s', server],
+                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                 close_fds=True)
+        except Exception:
+            continue
+        if rc != 0:
+            continue
+        shift = time.time() - before
+        if abs(shift) < 2.0:
+            log('clock already correct (%s, within %.1f s)' % (server, abs(shift)))
+        else:
+            log('clock set from %s: moved %+.1f s (%+.2f h) to %s'
+                % (server, shift, shift / 3600.0,
+                   time.strftime('%Y-%m-%d %H:%M:%S UTC', time.gmtime())))
+        return True
+    log('clock NOT set: no time server reachable (tried %s). Timestamps will be'
+        ' wrong until the next successful sync.' % ', '.join(TIME_SERVERS))
+    return False
+
+
 def _card_summary():
     """'card mounted, 31.2 GB free' / 'no card' - for one startup line."""
     sd = sd_log_dir()
@@ -2623,12 +3453,30 @@ def _card_summary():
 
 
 if __name__ == '__main__':
+    # Before anything timestamps anything. The sampler below writes epochs into
+    # the series log, and a sample written pre-sync would land ~33 h in the
+    # past of everything after it.
+    sync_clock()
+
     tls = serve_tls()
+    sampler = threading.Thread(target=chip_sampler)
+    sampler.daemon = True
+    sampler.start()
+
+    # Bind FIRST, announce second. "bridge up" used to be logged here, before
+    # the bind, so a start that died on EADDRINUSE left a log reading
+    # "bridge up" followed by a traceback - which looks like a server that came
+    # up and then crashed, rather than one that never started. Combined with an
+    # init script that prints "started" because it only backgrounds the process
+    # and records $!, there was no honest signal anywhere that the bridge was
+    # down. The message is now a statement about a socket that is actually held.
+    try:
+        server = Server(('0.0.0.0', LISTEN_PORT), Handler)
+    except socket.error, ex:
+        log('bridge FAILED to bind http %d: %s' % (LISTEN_PORT, ex))
+        raise
     log('bridge up; http %d, %s; %s'
         % (LISTEN_PORT,
            ('tls %d' % TLS_PORT) if tls else 'tls off (no usable certificate)',
            _card_summary()))
-    sampler = threading.Thread(target=chip_sampler)
-    sampler.daemon = True
-    sampler.start()
-    Server(('0.0.0.0', LISTEN_PORT), Handler).serve_forever()
+    server.serve_forever()

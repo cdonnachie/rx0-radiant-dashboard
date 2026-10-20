@@ -94,6 +94,23 @@ INIT_FILES = [
     ('device/rxdfan', INITD + '/rxdfan', 'S98rxdfan'),
 ]
 
+# The bridge's OWN dashboard, served by rxd_bridge.py out of its WEB_ROOT on
+# port 4112. Nothing to do with the stock-UI patch below, which is a separate
+# and optional route onto port 80; these only share a directory because
+# WEB_ROOT and the patcher's asset directory are both /var/order/web.
+#
+# All of them or none. The page without app.css is unreadable, and without
+# app.js it is a row of empty panels - and the bridge serves whatever is on
+# disk with no way of telling that two thirds of it is missing. Before the
+# split this was one file that no manifest mentioned at all, so a fresh
+# install came up with no page and fell back to serving /chipinfo at the root.
+PAGE_FILES = [
+    ('device/web/index.html', ORDER + '/web/index.html', '644'),
+    ('device/web/app.css', ORDER + '/web/app.css', '644'),
+    ('device/web/app.js', ORDER + '/web/app.js', '644'),
+    ('device/web/favicon.svg', ORDER + '/web/favicon.svg', '644'),
+]
+
 # The web-patch route. These add the dashboard WITHOUT rebuilding the
 # firmware package: rxdweb reapplies it to the unpacked web root on every
 # boot. S99rxdweb must sort after S99boot.sh, which is what unpacks the
@@ -424,14 +441,20 @@ def install(miner, package, crt, key, bg_path, backup, had_backup, pbv_files,
                % (tmp, bg_path, tmp, RESET, posixpath.basename(bg_path)))
     say('  installed the dashboard package (md5 %s)' % digest)
 
-    for local, remote, mode in DEVICE_FILES:
+    # The page's own directory, before anything is copied into it. Both lists
+    # are staged through tmp by basename, which is safe here only because no
+    # two entries share one - index.html, app.css and app.js do not collide
+    # with the scripts above.
+    miner.sudo('mkdir -p %s/web' % ORDER)
+    for local, remote, mode in DEVICE_FILES + PAGE_FILES:
         path = os.path.join(HERE, local)
         if not os.path.exists(path):
             raise SystemExit('missing %s - run this from a full checkout.' % local)
         name = posixpath.basename(remote)
         miner.put(path, tmp + '/' + name)
         miner.sudo('cp %s/%s %s; chmod %s %s' % (tmp, name, remote, mode, remote))
-    say('  installed %d support scripts to %s' % (len(DEVICE_FILES), ORDER))
+    say('  installed %d support scripts and %d page files to %s'
+        % (len(DEVICE_FILES), len(PAGE_FILES), ORDER))
 
     for local, remote, link in INIT_FILES:
         name = posixpath.basename(remote)
@@ -528,7 +551,7 @@ def install_webpatch(miner, args, pbv_files):
     """
     say('\n[1/4] Copying the dashboard and services to %s' % ORDER)
     miner.sudo('mkdir -p %s/js %s/css %s' % (WEB_ASSETS, WEB_ASSETS, CONF))
-    for local, remote, mode in DEVICE_FILES + WEB_FILES:
+    for local, remote, mode in DEVICE_FILES + PAGE_FILES + WEB_FILES:
         path = os.path.join(HERE, local)
         if not os.path.exists(path):
             raise SystemExit('missing file in this checkout: %s' % local)

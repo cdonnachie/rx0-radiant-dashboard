@@ -600,6 +600,141 @@ finally:
     b.SD_MEDIA, b._is_mount, b.CHIP_LOG = keep_media, keep_mount, keep_chip
 
 print('')
+print('=== the compact series: a copy of what the charts actually plot')
+# /history was re-deriving its lines with regex over megabytes of firmware
+# prose on every request - 9.97s for a 30-day window on this machine. These
+# rows carry the MINER'S OWN timestamps, which is what makes them safe to read
+# alongside the text logs: a row and the line it came from are one point.
+media = mkdtemp('rxd_series_')
+run_log = os.path.join(media, 'run.log')
+series = os.path.join(media, 'rxd_series.log')
+keep_run, keep_series = b.RUN_LOG, b.SERIES_LOG
+keep_media, keep_mount = b.SD_MEDIA, b._is_mount
+b.RUN_LOG, b.SERIES_LOG, b.SD_MEDIA = run_log, series, '/no/such/media'
+try:
+    b._is_mount = lambda path: False
+    with open(run_log, 'w') as handle:
+        handle.write(
+            'Booting Linux on physical CPU 0x0\n'
+            '2026-10-17 10:00:00\t\t30 mins Hashrate 310G\t\n'
+            '2026-10-17 10:00:00\t\tHashBoard 1 30 mins Hashrate 311.5G\t\n'
+            '2026-10-17 10:00:00\t\tHashBoard 1\t||\tchip 8\t||\tMAX temp 65\n'
+            '2026-10-17 10:00:00\t\tHashBoard 1\t||\tPCB temp1\t||\ttemp 69\n'
+            '2026-10-17 10:00:00\t\tHashBoard 1\t||\tPCB temp2\t||\ttemp 48\n'
+            '2026-10-17 10:00:03\t\tFan Speed 1206 1162.\n')
+
+    wrote = b.record_series_sample()
+    check('it transcribes the new lines', wrote > 0, wrote)
+    rows = open(series).read().strip().split('\n')
+    # Three: the machine total at 10:00:00, board 1 at 10:00:00, and the fans
+    # on their own stamp three seconds later. Machine-level values do not share
+    # a row with a board's.
+    equals('one row per (timestamp, board)', len(rows), 3)
+    equals('keyed by the miner\'s epoch, not ours',
+           int(rows[0].split()[0]), int(b._epoch('2026-10-17 10:00:00')))
+
+    # Nothing new in run.log: a second pass must not duplicate the rows.
+    equals('a second pass transcribes nothing', b.record_series_sample(), 0)
+    equals('so the file has not grown',
+           len(open(series).read().strip().split('\n')), 3)
+
+    cutoff = b._epoch('2026-10-17 00:00:00')
+    total, boards, fans = b.parse_series(cutoff)
+    equals('the machine hashrate came through',
+           total[int(b._epoch('2026-10-17 10:00:00'))], 310.0)
+    equals('the board hashrate too',
+           boards['1']['hashrate'][int(b._epoch('2026-10-17 10:00:00'))], 311.5)
+    equals('chip temp', boards['1']['chiptemp'][int(b._epoch('2026-10-17 10:00:00'))], 65)
+    equals('both PCB sensors',
+           [boards['1']['pcbtemp1'][int(b._epoch('2026-10-17 10:00:00'))],
+            boards['1']['pcbtemp2'][int(b._epoch('2026-10-17 10:00:00'))]], [69, 48])
+    equals('and the fans, on their own three-seconds-later stamp',
+           fans[int(b._epoch('2026-10-17 10:00:03'))], [1206, 1162])
+
+    # The claim that makes merging safe: the same sample read from the series
+    # AND from the text log is one point, because the keys are identical.
+    t_logs, b_logs, f_logs = b.parse_logs(cutoff)
+    equals('the text log yields the same hashrate key and value',
+           t_logs[int(b._epoch('2026-10-17 10:00:00'))], 310.0)
+    merged = dict(t_logs)
+    merged.update(total)
+    equals('so merging the two leaves one point', len(merged), len(t_logs))
+
+    oldest, newest = b._series_stamp_range()
+    equals('the range reports the oldest row', oldest,
+           int(b._epoch('2026-10-17 10:00:00')))
+    equals('and the newest', newest, int(b._epoch('2026-10-17 10:00:03')))
+finally:
+    b.RUN_LOG, b.SERIES_LOG = keep_run, keep_series
+    b.SD_MEDIA, b._is_mount = keep_media, keep_mount
+
+print('')
+print('=== /history reaches into the archive, but only when it has to')
+# The live logs only go back as far as the firmware's 2 MiB front trim left
+# them; the card keeps the rest. Reading the archive always would make the
+# ordinary 24-hour view parse a fortnight it has no use for, so the deeper
+# files are opened only when the window actually reaches past NAND.
+media = mkdtemp('rxd_hist_')
+mount = os.path.join(media, 'mmcblk0p1')
+os.mkdir(mount)
+os.mkdir(os.path.join(mount, b.ARCHIVE_DIR_NAME))
+live_run = os.path.join(media, 'run.log')
+live_his = os.path.join(media, 'his.log')
+arc_run = os.path.join(mount, b.ARCHIVE_DIR_NAME, 'run.log')
+arc_his = os.path.join(mount, b.ARCHIVE_DIR_NAME, 'his.log')
+
+# Live covers 10-16 onward; the archive goes back to 10-01.
+with open(live_run, 'w') as handle:
+    handle.write('2026-10-17 00:00:00\t\t30 mins Hashrate 310G\t\n')
+with open(live_his, 'w') as handle:
+    handle.write('-16 00:00:00\t\tsevered fragment\n'
+                 '2026-10-16 00:00:00\t\t30 mins Hashrate 300G\t\n')
+with open(arc_run, 'w') as handle:
+    handle.write('2026-10-17 00:00:00\t\t30 mins Hashrate 310G\t\n')
+with open(arc_his, 'w') as handle:
+    handle.write('2026-10-01 00:00:00\t\t30 mins Hashrate 250G\t\n'
+                 '2026-10-16 00:00:00\t\t30 mins Hashrate 300G\t\n')
+
+keep_media, keep_mount = b.SD_MEDIA, b._is_mount
+keep_run, keep_his = b.RUN_LOG, b.HIS_LOG
+b.SD_MEDIA, b.RUN_LOG, b.HIS_LOG = media, live_run, live_his
+try:
+    b._is_mount = lambda path: path == mount
+
+    equals('the fragment does not hide the first real stamp',
+           b._first_stamp(live_his), b._epoch('2026-10-16 00:00:00'))
+
+    inside = b._epoch('2026-10-16 12:00:00')
+    equals('a window inside the live files reads only those',
+           b.history_log_paths(inside), [live_run, live_his])
+
+    # Before the archive's oldest sample, or the cutoff would correctly drop
+    # the very line this is checking for.
+    deeper = b._epoch('2026-09-30 00:00:00')
+    equals('a window reaching past them picks up the archive too',
+           b.history_log_paths(deeper), [arc_run, arc_his, live_run, live_his])
+    check('with live read last, so it wins any disagreement',
+          b.history_log_paths(deeper)[-1] == live_his)
+
+    b._is_mount = lambda path: False
+    equals('and with no card it is just the live pair',
+           b.history_log_paths(deeper), [live_run, live_his])
+
+    # The reason reading a line twice is safe: the series are keyed by epoch,
+    # so the same sample from the archive and from the live file is one point.
+    b._is_mount = lambda path: path == mount
+    total, boards, fans = b.parse_logs(deeper)
+    equals('a sample present in BOTH stores is counted once',
+           sorted(total.keys()),
+           [b._epoch('2026-10-01 00:00:00'), b._epoch('2026-10-16 00:00:00'),
+            b._epoch('2026-10-17 00:00:00')])
+    equals('and it reaches the archive-only sample',
+           total[b._epoch('2026-10-01 00:00:00')], 250.0)
+finally:
+    b.SD_MEDIA, b._is_mount = keep_media, keep_mount
+    b.RUN_LOG, b.HIS_LOG = keep_run, keep_his
+
+print('')
 print('=== the bridge logs its own events')
 # Nothing ever wrote to /var/log/rxdbridge.log: request logging is suppressed
 # and there was not one print in the bridge, so the file's entire contents
@@ -732,6 +867,64 @@ finally:
     b.CHIP_LOG = keep
 check('absent log returns the empty shape',
       out == {'timestamps': [], 'boards': {}, 'soc': []}, out)
+
+print('')
+print('=== /performance names the averaging window it actually used')
+# Neither figure is instantaneous, and the payload used to imply one was by
+# calling it "live". rtpow is the miner's five-minute trailing average, so two
+# samples a minute apart overlap by four fifths; anyone timing a clock change
+# off repeated readings needs telling that rather than left to assume.
+keep_live, keep_recent = b.live_hashrate, b.recent_hashrate
+try:
+    b.live_hashrate = lambda: 284.0
+    b.recent_hashrate = lambda: 999.0     # must not be reached while live answers
+    rep = b.performance()
+    equals('rtpow is the five minute figure, not an instant one',
+           rep['window'], '5min')
+    equals('its length is stated in seconds too', rep['windowSeconds'], 300)
+    equals('and the live source wins while it answers', rep['actual'], 284.0)
+
+    b.live_hashrate = lambda: None
+    rep = b.performance()
+    equals('falling back to the log says so', rep['window'], '30min')
+    equals('with the longer window', rep['windowSeconds'], 1800)
+    equals('and carries the log figure', rep['actual'], 999.0)
+
+    b.recent_hashrate = lambda: None
+    rep = b.performance()
+    check('no figure at all leaves the window unnamed',
+          rep['window'] is None, rep['window'])
+    check('and its length unstated',
+          rep['windowSeconds'] is None, rep['windowSeconds'])
+finally:
+    b.live_hashrate, b.recent_hashrate = keep_live, keep_recent
+
+equals('every window performance() can report has a length',
+       sorted(b.HASHRATE_WINDOWS), ['30min', '5min'])
+
+print('')
+print('fan rpm is the fastest tachometer, not whichever slot comes first')
+# Below ~19% duty the pulse counter misses most revolutions, and the readings
+# that do land move between slots. Reading slot 0 alone reported 0 rpm on a
+# board whose stock page was showing 670 in the next column, which read as a
+# dead fan and is not one.
+equals('a reading in slot 0 is reported',
+       b._fan_rpm('{"ret": {"fans": [625,0,0,0]}}'), 625)
+equals('and so is one that landed in slot 1',
+       b._fan_rpm('{"ret": {"fans": [0,491,0,0]}}'), 491)
+equals('the fastest wins when several report',
+       b._fan_rpm('{"ret": {"fans": [625,804,0,0]}}'), 804)
+# All zero is a real answer - the fan may be turning below the tach floor -
+# and the page prints the duty and names the floor for it. None would print a
+# dash and claim the miner never answered.
+equals('all slots quiet still reports zero, not unknown',
+       b._fan_rpm('{"ret": {"fans": [0,0,0,0]}}'), 0)
+check('no fans field at all is unknown',
+      b._fan_rpm('{"ret": {"code": 0}}') is None)
+check('and so is an empty array',
+      b._fan_rpm('{"ret": {"fans": []}}') is None)
+equals('a single-fan reply still works',
+       b._fan_rpm('{"ret": {"fans": [1162]}}'), 1162)
 
 print('')
 if fail:

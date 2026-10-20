@@ -10,7 +10,7 @@ bridge on 4112 and the stock web API on 80 - so stock_summary() can be pointed
 at a real device rather than a fixture, while _fetch_summary() against the
 same address must still prefer the bridge.
 """
-import sys
+import sys, time
 
 sys.path.insert(0, '/var/order')
 import rxd_bridge as b
@@ -50,6 +50,151 @@ try:
 except Exception, ex:
     check('stock_panel', False, ex)
     data = {}
+
+print('')
+print('=== the loopback panel has its own timeout, not the per-peer one')
+# Raising SWARM_TIMEOUT instead would have been the easy fix and the wrong one:
+# /swarm joins every peer thread for SWARM_TIMEOUT + 1.0, so a bigger per-peer
+# budget makes the swarm page slower for everyone to rescue one local call.
+check('PANEL_TIMEOUT is larger than the per-peer budget',
+      b.PANEL_TIMEOUT > b.SWARM_TIMEOUT,
+      '%s vs %s' % (b.PANEL_TIMEOUT, b.SWARM_TIMEOUT))
+check('PANEL_TTL is shorter than the page refresh, so a tick is never stale',
+      b.PANEL_TTL < 10.0, b.PANEL_TTL)
+check('stock_panel still defaults to the per-peer budget for real peers',
+      b.stock_panel.func_defaults == (b.SWARM_TIMEOUT,),
+      b.stock_panel.func_defaults)
+
+print('')
+print('=== local_panel deduplicates and does not cache failures')
+real_panel = b.stock_panel
+calls = []
+
+
+def reset_cache():
+    b._panel_cache[0] = 0.0
+    b._panel_cache[1] = None
+
+
+def counting(host, timeout=None):
+    calls.append((host, timeout))
+    return {'pools': [{'connect': 1, 'accepted': 7, 'rejected': 0,
+                       'addr': 'stub', 'user': 'w.rx0', 'no': 1}],
+            'runtime': '00:00:01:00'}
+
+
+def boom(host, timeout=None):
+    calls.append((host, timeout))
+    raise IOError('timed out')
+
+
+try:
+    reset_cache()
+    b.stock_panel = counting
+    first = b.local_panel()
+    second = b.local_panel()
+    check('two calls inside the TTL cost one appweb fetch', len(calls) == 1,
+          '%d fetches' % len(calls))
+    check('both callers get the same payload', first is second)
+    check('it asks loopback, with the panel budget',
+          calls[0] == ('127.0.0.1', b.PANEL_TIMEOUT), calls[0])
+
+    # The reason this matters: /pool and /summary both want the counts, and
+    # before the cache each paid for its own 1.3-2.9 s round trip.
+    del calls[:]
+    b._panel_cache[0] = time.time() - 1.0      # expire it, keep the payload
+    b.local_panel()
+    check('an expired entry is refetched', len(calls) == 1, '%d fetches' % len(calls))
+
+    del calls[:]
+    reset_cache()
+    b.stock_panel = boom
+    raised = False
+    try:
+        b.local_panel()
+    except IOError:
+        raised = True
+    check('a failing fetch propagates rather than returning junk', raised)
+    check('and nothing was cached', b._panel_cache[1] is None)
+
+    # A cached failure would be the worst outcome: /pool would keep answering
+    # 503 for the whole TTL after appweb had already recovered.
+    del calls[:]
+    b.stock_panel = counting
+    b.local_panel()
+    check('the next caller after a failure re-asks immediately', len(calls) == 1,
+          '%d fetches' % len(calls))
+
+    # local_shares swallows errors by contract - /summary must still produce a
+    # row for a miner whose appweb is wedged - so check it survives the raise.
+    reset_cache()
+    b.stock_panel = boom
+    shares = b.local_shares()
+    check('local_shares degrades to None rather than 0 when the panel fails',
+          shares.get('accepted') is None and shares.get('rejected') is None,
+          shares)
+finally:
+    b.stock_panel = real_panel
+    reset_cache()
+
+print('')
+print('=== sync_clock: best effort, never fatal, never leaks descriptors')
+real_call = b.subprocess.call
+attempts = []
+
+
+def fake_call(argv, **kw):
+    attempts.append((argv, kw))
+    # Succeed only on the second server, to prove it falls through.
+    return 0 if argv[-1] == b.TIME_SERVERS[1] else 1
+
+
+def exploding_call(argv, **kw):
+    attempts.append((argv, kw))
+    raise OSError('no such binary')
+
+
+try:
+    check('there is more than one time server to try', len(b.TIME_SERVERS) > 1,
+          b.TIME_SERVERS)
+
+    del attempts[:]
+    b.subprocess.call = fake_call
+    ok = b.sync_clock()
+    check('returns True once a server answers', ok is True)
+    check('tried servers in order until one worked', len(attempts) == 2,
+          [a[0][-1] for a in attempts])
+    check('invoked busybox rdate -s', attempts[0][0][:3] == ['busybox', 'rdate', '-s'],
+          attempts[0][0])
+    # The whole reason the dashboard went down on 2026-10-20 was an inherited
+    # descriptor, so this is checked on every spawn now, not just the fan one.
+    check('close_fds=True, so no descriptor is inherited',
+          attempts[0][1].get('close_fds') is True, attempts[0][1])
+
+    del attempts[:]
+
+    def refusing_call(argv, **kw):
+        attempts.append((argv, kw))
+        return 1
+
+    b.subprocess.call = refusing_call
+    check('returns False when nothing answers', b.sync_clock() is False)
+    check('and it tried every server before giving up',
+          len(attempts) == len(b.TIME_SERVERS),
+          '%d attempts for %d servers' % (len(attempts), len(b.TIME_SERVERS)))
+
+    del attempts[:]
+    b.subprocess.call = exploding_call
+    raised = False
+    try:
+        result = b.sync_clock()
+    except Exception:
+        raised = True
+        result = None
+    check('a missing busybox raises nothing', not raised)
+    check('and reports failure rather than claiming success', result is False)
+finally:
+    b.subprocess.call = real_call
 
 print('')
 print('=== stock_summary against a real miner')

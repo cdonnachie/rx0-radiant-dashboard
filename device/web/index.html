@@ -1,0 +1,186 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RX0 Overview</title>
+<link rel="icon" type="image/svg+xml" href="favicon.svg">
+<link rel="stylesheet" href="app.css">
+<!--
+  Served by rxd_bridge.py from /var/order/web, NOT by appweb. The stock UI is
+  untouched on port 80 and remains the fallback and the firmware uploader.
+
+  Everything here is same-origin against the bridge's own endpoints, so there
+  is no CORS, no jQuery and no build step. Three files: this markup, app.css
+  and app.js, split apart when the single file passed 54 KB and a one-line
+  style change meant scrolling through 900 lines of JavaScript to find it.
+  All three are served with Cache-Control: no-store, so a reload is always
+  enough to pick up a deploy - there is no cache to bust.
+
+  The page is a set of panels switched by the nav, one per fragment. Markup
+  for every panel is present from the start and hidden with .hide rather than
+  built on demand: the panels are small, and the alternative is a second
+  rendering path that only runs when someone clicks. app.js owns which one is
+  visible - see PAGES there, which drives the nav, the routing and what each
+  panel fetches on first open.
+-->
+</head>
+<body>
+<div class="wrap">
+
+<header>
+	<h1 class="brand">
+		<span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 145 136" xmlns="http://www.w3.org/2000/svg"><path d="M88.6944 114.885C89.2163 115.401 89.906 115.675 90.6393 115.675H124.24C124.861 115.675 125.173 114.923 124.733 114.483L62.6656 52.4336C62.1421 51.9102 61.4321 51.6162 60.6918 51.6162H42.9265C36.6362 51.6162 33.4445 59.1721 37.8534 63.6587C51.6499 77.6978 74.3987 100.773 88.6944 114.885Z" fill="currentColor"/><path d="M72.158 20H18.7025C18.0741 20 17.7638 20.7679 18.2113 21.209C23.4549 26.3766 28.07 31.6859 33.3203 36.9323C33.9127 37.5244 34.5052 38.1164 35.2162 38.59C38.297 40.8398 41.7334 42.0239 45.6437 42.1423H81.6373C82.3483 42.1423 83.0593 42.1423 83.7702 42.2607C88.51 43.208 92.4203 47.9443 91.3539 53.6279C90.5517 57.9793 86.7573 61.2233 82.3285 61.4321C82.0026 61.4474 81.8539 61.842 82.0846 62.0727L97.6305 77.6142C98.2463 78.2298 99.1212 78.5604 99.9733 78.3817C99.9841 78.3795 99.9943 78.3773 100.004 78.3751C101.9 78.0199 103.796 77.191 105.573 76.2438C108.417 74.7045 111.024 72.6915 113.038 70.0866C116.712 65.2318 118.845 59.9035 119.2 53.8647C119.437 51.4965 119.319 49.1284 118.963 46.8786C118.489 43.9184 117.66 41.0766 116.475 38.3532C113.868 32.5512 109.839 27.9333 104.27 24.6179C99.767 22.0129 94.9088 20.7104 89.8135 20.2368C88.3915 20.1184 87.0881 20.1184 85.6661 20.1184C81.1634 20 76.6607 20 72.158 20Z" fill="currentColor"/></svg></span>
+		<span class="brand-word" aria-hidden="true"><svg viewBox="0 0 545 93" xmlns="http://www.w3.org/2000/svg"><path d="M395.003 36.9684L434.683 71.5458C436.512 73.139 438.855 74.0167 441.28 74.0167C444.667 74.0167 447.413 71.2711 447.413 67.8841V20.1263H435.579V54.9308L396.91 21.0422C395.408 19.7258 393.478 19.0001 391.481 19C386.932 18.9999 383.244 22.6877 383.244 27.2368V72.8902H395.003V36.9684Z" fill="currentColor"/><path d="M138.172 35.3842L114.132 72.8902H98.5507L129.407 24.8774L129.408 24.8746C131.404 21.8085 134.161 19.2217 138.45 19.2217C142.53 19.2217 145.282 21.582 147.333 24.8608L177.408 72.8902H161.796L153.103 59.4143L153.096 59.4031C151.899 57.6431 150.096 54.7465 148.544 52.2544L148.506 52.193C148.352 51.9463 148.201 51.7036 148.054 51.4666L148.052 51.4635L138.172 35.3842Z" fill="currentColor"/><path d="M33.565 58.3342V72.8902H20.3897V47.018H62.6414C65.1995 47.018 67.5646 46.3805 69.3245 45.1492C71.1091 43.9005 72.2648 42.034 72.2648 39.7237C72.2648 37.2675 71.3239 35.3078 69.539 34.0033C67.8087 32.7385 65.4133 32.1826 62.6414 32.1826H20.3897L20.3896 20.1263H61.3744C66.9411 20.1263 73.1209 21.1014 77.8695 23.9068C82.5406 26.6665 85.8873 31.2225 85.8873 38.6546C85.8873 46.7703 81.3256 53.3122 73.7277 54.9889L72.0793 55.3527L75.4697 59.0006C76.4139 59.9535 77.5268 61.1568 78.9567 62.7525L79.1213 62.9296L79.118 62.9327C79.4384 63.2908 79.7744 63.6682 80.1277 64.0664L87.6942 72.8902H70.6192L57.2607 58.3342H33.565Z" fill="currentColor"/><path d="M189.612 32.1826V51.6093H202.862V32.1826H225.696C234.553 32.1826 241.58 38.2541 241.58 46.7138C241.58 50.9754 239.901 54.5764 237.033 57.0993C234.177 59.6115 230.209 60.9984 225.696 60.9984H202.862H189.612V72.8902H225.696C242.434 72.8902 254.606 61.2389 254.606 45.9737C254.606 30.8404 242.637 20.1263 225.696 20.1263H189.612V32.1826Z" fill="currentColor"/><path d="M333.154 35.3842L309.114 72.8902H293.533L324.389 24.8774L324.391 24.8736C326.387 21.8079 329.144 19.2217 333.432 19.2217C337.512 19.2217 340.264 21.582 342.315 24.8608L372.391 72.8902H356.288L348.094 59.4265L348.078 59.4031C346.882 57.6436 345.079 54.748 343.528 52.2564L343.526 52.2537L343.034 51.4635L333.154 35.3842Z" fill="currentColor"/><path d="M485.244 32.1826H459.179V20.1263H524.685V32.1826H498.419V72.8902H485.244V32.1826Z" fill="currentColor"/><path d="M281.633 72.8902V20.1263H268.457V72.8902H281.633Z" fill="currentColor"/></svg></span>
+		<span class="sr-only">Radiant RX0</span>
+	</h1>
+	<span class="sub" id="model">&mdash;</span>
+	<span class="spacer"></span>
+	<span class="sub"><span class="dot" id="dot"></span><span id="status">connecting</span></span>
+</header>
+
+<!-- Both of these are about the machine rather than about a page, so they sit
+     above the nav and stay put as you move between panels. A warm-up warning
+     that vanished when you switched to the charts would be missing from the
+     one place it matters most. -->
+<div class="banner hide" id="soak"></div>
+<div class="err hide" id="err"></div>
+
+<nav class="nav" id="nav" aria-label="Sections"></nav>
+
+<section class="page" id="page-overview">
+
+	<div class="hero">
+		<div class="rate">
+			<span class="big" id="gh">&mdash;</span>
+			<span class="unit">GH/s</span>
+			<span class="mark hide" id="ghMark">*</span>
+			<span class="at" id="at"></span>
+		</div>
+		<div class="meta">
+			<span>of theoretical <span class="pill" id="pct">&mdash;</span></span>
+			<span>expected <b id="expected">&mdash;</b></span>
+			<span>shortfall <b id="gap">&mdash;</b></span>
+			<span id="fillNote"></span>
+		</div>
+	</div>
+
+	<div class="grid">
+		<div class="stat"><div class="k">Chip temp</div>
+			<div class="v" id="tMean">&mdash;</div>
+			<div class="n" id="tRange">&mdash;</div></div>
+		<div class="stat"><div class="k">Spread</div>
+			<div class="v" id="spread">&mdash;</div>
+			<div class="n">hottest &minus; coldest</div></div>
+		<div class="stat"><div class="k">Core rail</div>
+			<div class="v" id="rail">&mdash;</div>
+			<div class="n" id="railRange">&mdash;</div></div>
+		<div class="stat"><div class="k">SoC</div>
+			<div class="v" id="soc">&mdash;</div>
+			<div class="n">control board</div></div>
+		<div class="stat"><div class="k">Fan</div>
+			<div class="v" id="fanRpm">&mdash;</div>
+			<div class="n" id="fanMode">&mdash;</div></div>
+		<div class="stat"><div class="k">Pool</div>
+			<div class="v" id="poolState">&mdash;</div>
+			<div class="n" id="poolWho">&mdash;</div></div>
+		<div class="stat"><div class="k">Shares</div>
+			<div class="v" id="shares">&mdash;</div>
+			<div class="n" id="rejects">&mdash;</div></div>
+		<div class="stat"><div class="k">Uptime</div>
+			<div class="v" id="uptime">&mdash;</div>
+			<div class="n">since boot</div></div>
+	</div>
+
+	<div class="note">
+		<p><b>Absolute GH/s is the number to compare clocks on.</b> The percentage
+		divides by a figure that scales with the clock, so lowering the clock on a
+		board that has plateaued raises the percentage while the machine does less
+		work. Use it to reject a clock that is clearly failing &mdash; both figures
+		fall together then &mdash; not to choose between two that work.</p>
+		<p><b>Hashrate is a five-minute trailing average</b> (the miner's
+		<code>rtpow</code>), not an instantaneous reading. Two samples a minute
+		apart share four fifths of their window, so repeating a reading shows the
+		board is steady; it does not make the number more precise.</p>
+		<p>Served by the bridge on port 4112. The stock interface is unchanged on
+		port 80 and remains the place to configure pools and upload firmware.</p>
+	</div>
+
+</section>
+
+<section class="page hide" id="page-history">
+
+	<div class="chart-head">
+		<h2>History</h2>
+		<div class="ranges" id="ranges"></div>
+	</div>
+
+	<div class="card" id="hashCard">
+		<div class="legend" id="hashLegend"></div>
+		<svg class="chart" id="hashChart"></svg>
+		<div class="spinner"><i></i><span class="spin-label"></span></div>
+	</div>
+
+	<div class="card" id="tempCard">
+		<div class="legend" id="tempLegend"></div>
+		<svg class="chart" id="tempChart"></svg>
+		<div class="spinner"><i></i><span class="spin-label"></span></div>
+	</div>
+
+	<div class="note">
+		<p><b>Point at a line to read it.</b> The values appear in the legend
+		above each chart, with the time on the right, and a dot marks the sample
+		they came from. Where the series has a gap &mdash; a reboot, or the
+		bridge restarting &mdash; the readout shows a dash instead of snapping
+		to the nearest reading, and the line breaks for the same reason.</p>
+	</div>
+
+</section>
+
+<section class="page hide" id="page-efficiency">
+
+	<h2>Efficiency</h2>
+	<div class="card">
+		<div id="powerNow" class="power-now">&mdash;</div>
+		<form class="power-form" id="powerForm">
+			<label for="watts">Wall watts</label>
+			<input type="number" id="watts" step="0.1" min="1" max="2000"
+			       placeholder="127.1" required>
+			<input type="text" id="note" maxlength="80" placeholder="note, e.g. fan 100%">
+			<button type="submit" id="powerSave">Record this point</button>
+		</form>
+		<div class="power-msg" id="powerMsg"></div>
+		<div class="tablewrap"><table class="ptable" id="powerTable"></table></div>
+	</div>
+
+	<div class="note">
+		<p><b>There is no power sensor on this board</b>, so the watts have to
+		come from a meter at the wall. Everything else in the row &mdash;
+		hashrate, clock, chip temperature, uptime &mdash; is captured for you at
+		the moment you save, which is what makes two rows comparable.</p>
+		<p><b>Rows recorded inside the warm-up hour are marked with an asterisk.</b>
+		They are real readings of a real machine state, but the hashrate was
+		still climbing, so they cannot be compared against a settled row.</p>
+	</div>
+
+</section>
+
+<section class="page hide" id="page-chips">
+
+	<h2>Chips <span id="chipCount"></span></h2>
+	<div class="chips" id="chips"></div>
+
+	<div class="note">
+		<p><b>Chip temperatures are whole degrees</b> and hold one value for
+		minutes at a time, so a reading of 65 means 64.5&ndash;65.5. The spread
+		is reliable; a difference of one degree between two chips is not, which
+		is why only the hottest and coldest are marked rather than every chip
+		being shaded along a gradient.</p>
+	</div>
+
+</section>
+
+</div>
+<script src="app.js"></script>
+</body>
+</html>

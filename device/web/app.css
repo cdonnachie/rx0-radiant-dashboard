@@ -1,0 +1,304 @@
+/* Styles for the bridge's own dashboard, served by rxd_bridge.py out of
+   /var/order/web. Split out of index.html at ~54 KB, when the single file had
+   grown past the point where a stylesheet change could be reviewed without
+   scrolling through 900 lines of JavaScript to find it.
+
+   Not shared with webui/css/radiant.css. That one patches IceRiver's stock UI
+   on port 80 and has to live with their markup and their jQuery; this one owns
+   its document. They sit in the same directory on the device because the
+   bridge's WEB_ROOT and the stock patcher's asset directory are both
+   /var/order/web, which is worth knowing before adding a file called
+   anything generic.
+
+   Everything is one dark theme on purpose: this page is read in a garage or a
+   basement next to the machine, and the brand palette is defined for dark. */
+
+:root {
+	--rxd-teal: #00F2F2;
+	--rxd-soft-blue: #7FE0FF;
+	--rxd-sky-blue: #00A8DE;
+	--bg-primary: #000000;
+	--bg-secondary: #16161A;
+	--bg-card: #1C1C22;
+	--bg-card-alt: #25252C;
+	--border: #35353E;
+	--text-primary: #EDEDED;
+	--text-secondary: #9A9AA5;
+	--accent: #00F2F2;
+	--warn: #E0A030;
+	--bad: #FF5C5C;
+}
+* { box-sizing: border-box; }
+body {
+	margin: 0;
+	padding: 24px 16px 48px;
+	background: var(--bg-primary);
+	color: var(--text-primary);
+	font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+	font-size: 15px;
+	line-height: 1.5;
+}
+.wrap { max-width: 1040px; margin: 0 auto; }
+
+header {
+	display: flex; align-items: baseline; flex-wrap: wrap; gap: 12px;
+	border-bottom: 1px solid var(--border);
+	padding-bottom: 14px; margin-bottom: 14px;
+}
+/* The official lockup, inlined rather than linked: this page is served by the
+   bridge off a miner that may have no route to the internet, and a header
+   that silently fails to load is worse than no logo. Both SVGs use
+   fill="currentColor", so the symbol and wordmark take their colour from CSS
+   and need no editing to re-theme. Sizes keep each one's own aspect ratio -
+   symbol 145:136, wordmark 545:93. */
+h1.brand { margin: 0; display: flex; align-items: center; gap: 11px; }
+.brand-mark, .brand-word { display: block; }
+.brand-mark { width: 30px; height: 28px; color: var(--accent); }
+.brand-word { width: 118px; height: 20px; color: var(--text-primary); }
+.brand-mark svg, .brand-word svg { width: 100%; height: 100%; display: block; }
+
+/* The logo carries the name visually; this carries it for a screen reader
+   and for the tab title, without putting the word on screen twice. */
+.sr-only {
+	position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+	overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+}
+header .sub { color: var(--text-secondary); font-size: 13px; }
+header .spacer { flex: 1 1 auto; }
+.dot {
+	width: 8px; height: 8px; border-radius: 50%;
+	background: var(--bad); display: inline-block; margin-right: 6px;
+	vertical-align: middle;
+}
+.dot.live { background: var(--accent); }
+
+/* --- navigation ----------------------------------------------------------
+
+   Real anchors to real fragments, not buttons with click handlers. That buys
+   keyboard navigation, focus order, middle-click, and a URL you can leave on
+   a phone propped against the miner - #history survives a reload, which the
+   old single scroll did not. The active tab is marked twice over, by colour
+   for sighted readers and aria-current for the rest; colour alone would be
+   the only cue, and the accent is also the hashrate colour.
+
+   The underline overlaps the header's bottom border by -1px so the active tab
+   reads as a tab rather than as text with a line under it. */
+.nav {
+	display: flex; flex-wrap: wrap; gap: 2px;
+	border-bottom: 1px solid var(--border); margin-bottom: 22px;
+}
+.nav a {
+	padding: 8px 14px; font-size: 13px; text-decoration: none;
+	color: var(--text-secondary);
+	border-bottom: 2px solid transparent; margin-bottom: -1px;
+}
+.nav a:hover { color: var(--text-primary); }
+.nav a.on { color: var(--accent); border-bottom-color: var(--accent); }
+/* focus-visible, not focus: a mouse click should not leave a ring behind. */
+.nav a:focus-visible { outline: 2px solid var(--accent); outline-offset: -4px; }
+
+/* A page's first heading already has the nav's margin above it, so its own
+   24px would double the gap and make every tab look mis-aligned. */
+.page > h2:first-child,
+.page > .chart-head:first-child h2 { margin-top: 0; }
+
+.hero {
+	background: var(--bg-card); border: 1px solid var(--border);
+	border-radius: 10px; padding: 22px 24px; margin-bottom: 16px;
+}
+.hero .rate { display: flex; align-items: baseline; flex-wrap: wrap; gap: 10px; }
+.hero .big {
+	font-size: 52px; font-weight: 700; line-height: 1;
+	color: var(--accent); font-variant-numeric: tabular-nums;
+}
+.hero .unit { font-size: 20px; color: var(--text-secondary); }
+.hero .at { font-size: 15px; color: var(--text-secondary); }
+.mark { color: var(--warn); font-weight: 700; }
+.hero .meta {
+	margin-top: 14px; display: flex; flex-wrap: wrap; gap: 10px 26px;
+	font-size: 13px; color: var(--text-secondary);
+}
+.hero .meta b { color: var(--text-primary); font-weight: 600; }
+.pill {
+	display: inline-block; padding: 2px 10px; border-radius: 999px;
+	border: 1px solid var(--border); background: var(--bg-card-alt);
+	font-size: 13px; font-variant-numeric: tabular-nums;
+}
+
+.grid {
+	display: grid; gap: 12px; margin-bottom: 16px;
+	grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+}
+.stat {
+	background: var(--bg-card); border: 1px solid var(--border);
+	border-radius: 10px; padding: 14px 16px;
+	/* Grid items default to min-width:auto and so refuse to shrink below their
+	   min-content width. A pool address is one unbreakable token - there is no
+	   space in "eu-west.somelongpoolname.example.com:3333" to wrap at - so
+	   without this the POOL card grows past its 1fr share and drags the whole
+	   page into horizontal scroll on a phone. */
+	min-width: 0;
+}
+.stat .k {
+	font-size: 11px; letter-spacing: .09em; text-transform: uppercase;
+	color: var(--text-secondary); margin-bottom: 6px;
+}
+.stat .v {
+	font-size: 23px; font-weight: 600; font-variant-numeric: tabular-nums;
+}
+/* Wrapped, not truncated with an ellipsis: a clipped pool address hides WHICH
+   pool is being mined to, and noticing the wrong one is the entire point of
+   putting it on screen. Two lines of small grey text costs nothing. */
+.stat .n {
+	font-size: 12px; color: var(--text-secondary); margin-top: 3px;
+	overflow-wrap: anywhere;
+}
+.stat .v.ok { color: var(--accent); }
+.stat .v.bad { color: var(--bad); }
+
+h2 {
+	font-size: 12px; letter-spacing: .09em; text-transform: uppercase;
+	color: var(--text-secondary); margin: 24px 0 10px; font-weight: 600;
+}
+
+.chart-head { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+.chart-head h2 { margin: 24px 0 10px; }
+.ranges { margin-left: auto; display: flex; gap: 6px; }
+.ranges button {
+	background: var(--bg-card); color: var(--text-secondary);
+	border: 1px solid var(--border); border-radius: 6px;
+	padding: 4px 11px; font: inherit; font-size: 12px; cursor: pointer;
+}
+.ranges button:hover { color: var(--text-primary); }
+.ranges button.on {
+	background: var(--bg-card-alt); color: var(--accent);
+	border-color: var(--accent);
+}
+.card {
+	background: var(--bg-card); border: 1px solid var(--border);
+	border-radius: 10px; padding: 12px 14px; margin-bottom: 12px;
+	position: relative;
+}
+.ranges button[disabled] { opacity: .5; cursor: default; }
+
+/* The old chart stays visible underneath, dimmed. Blanking it would lose the
+   context you were just reading and make a multi-second fetch feel longer
+   than it is - 30 days means the bridge parsing his.log and run.log on a
+   500 MHz ARM core. */
+.card.busy .chart { opacity: .2; }
+.card.busy .legend { opacity: .35; }
+.spinner {
+	position: absolute; left: 0; right: 0; top: 0; bottom: 0;
+	display: none; align-items: center; justify-content: center; gap: 10px;
+	font-size: 12px; color: var(--text-secondary); pointer-events: none;
+}
+.card.busy .spinner { display: flex; }
+.spinner i {
+	width: 15px; height: 15px; border-radius: 50%;
+	border: 2px solid var(--border); border-top-color: var(--accent);
+	animation: rxdspin .7s linear infinite;
+}
+@keyframes rxdspin { to { transform: rotate(360deg); } }
+/* A spinner is decoration; honour a reader who has asked for less motion.
+   The label still says what is happening, so nothing is lost. */
+@media (prefers-reduced-motion: reduce) {
+	.spinner i { animation: none; border-top-color: var(--border); }
+}
+.legend {
+	display: flex; gap: 18px; flex-wrap: wrap;
+	font-size: 12px; color: var(--text-secondary); margin-bottom: 4px;
+}
+.legend i { display: inline-block; width: 11px; height: 2px; vertical-align: middle; margin-right: 6px; }
+.legend b { color: var(--text-primary); font-weight: 600; font-variant-numeric: tabular-nums; }
+.chart { width: 100%; height: 190px; display: block; cursor: crosshair; }
+.chart text { fill: var(--text-secondary); font-size: 10px; }
+.chart .grid { stroke: var(--border); stroke-width: 1; }
+.chart .axis { stroke: var(--border); stroke-width: 1; }
+/* The readout must never eat its own pointer events: a dot sitting under the
+   cursor would fire pointerleave and make the thing flicker as you track a
+   line. */
+.chart .hover { pointer-events: none; }
+.chart .hover-line { stroke: var(--text-secondary); stroke-width: 1; stroke-dasharray: 3 3; }
+.chart .hover-dot { stroke: var(--bg-card); stroke-width: 1.5; }
+/* Pushed to the far end so the series values never shift sideways as the
+   timestamp changes width - a number you are trying to read should not move. */
+.legend .at { margin-left: auto; color: var(--text-primary); font-variant-numeric: tabular-nums; }
+.chart path { fill: none; stroke-width: 1.6; stroke-linejoin: round; stroke-linecap: round; }
+.empty { color: var(--text-secondary); font-size: 13px; padding: 24px 0; text-align: center; }
+
+.power-now { font-size: 14px; margin-bottom: 10px; }
+.power-now b { color: var(--accent); font-variant-numeric: tabular-nums; }
+.power-form { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; font-size: 13px; }
+.power-form label { color: var(--text-secondary); }
+.power-form input {
+	background: var(--bg-primary); color: var(--text-primary);
+	border: 1px solid var(--border); border-radius: 6px;
+	padding: 6px 9px; font: inherit; font-size: 13px;
+}
+.power-form input#watts { width: 100px; font-variant-numeric: tabular-nums; }
+.power-form input#note { flex: 1 1 180px; min-width: 140px; }
+.power-form button {
+	background: var(--bg-card-alt); color: var(--accent);
+	border: 1px solid var(--accent); border-radius: 6px;
+	padding: 6px 14px; font: inherit; font-size: 13px; cursor: pointer;
+}
+.power-form button:hover { background: #22323A; }
+.power-form button[disabled] { opacity: .5; cursor: default; }
+.power-msg { font-size: 12.5px; margin-top: 8px; min-height: 1em; color: var(--text-secondary); }
+.power-msg.bad { color: var(--bad); }
+
+.tablewrap { overflow-x: auto; margin-top: 12px; }
+.ptable { border-collapse: collapse; width: 100%; font-size: 13px; }
+.ptable th, .ptable td {
+	text-align: right; padding: 6px 10px; white-space: nowrap;
+	border-bottom: 1px solid var(--border); font-variant-numeric: tabular-nums;
+}
+.ptable th {
+	color: var(--text-secondary); font-weight: 600; font-size: 11px;
+	letter-spacing: .06em; text-transform: uppercase;
+}
+.ptable th:first-child, .ptable td:first-child,
+.ptable th:last-child, .ptable td:last-child { text-align: left; }
+.ptable td:last-child { color: var(--text-secondary); white-space: normal; }
+.ptable tr.best td { color: var(--accent); }
+.ptable .warm { color: var(--warn); cursor: help; }
+.chips { display: grid; gap: 10px; grid-template-columns: repeat(auto-fit, minmax(118px, 1fr)); }
+.chip {
+	background: var(--bg-card); border: 1px solid var(--border);
+	border-left: 3px solid var(--border);
+	border-radius: 8px; padding: 10px 12px; font-variant-numeric: tabular-nums;
+}
+.chip.hot { border-left-color: var(--warn); }
+.chip.cold { border-left-color: var(--rxd-sky-blue); }
+.chip .no { font-size: 11px; color: var(--text-secondary); }
+.chip .t { font-size: 19px; font-weight: 600; }
+.chip .d { font-size: 12px; color: var(--text-secondary); }
+
+.note {
+	margin-top: 26px; padding-top: 14px; border-top: 1px solid var(--border);
+	font-size: 12.5px; color: var(--text-secondary);
+}
+.note b { color: var(--text-primary); }
+.err {
+	background: #2A1414; border: 1px solid var(--bad); color: #FFC9C9;
+	border-radius: 8px; padding: 10px 14px; margin-bottom: 16px; font-size: 13px;
+}
+
+/* Amber, not red: a warming board is working correctly, it just cannot be
+   compared against anything yet. Red would say something is wrong. */
+.banner {
+	background: #2A2214; border: 1px solid var(--warn);
+	border-radius: 8px; padding: 11px 14px; margin-bottom: 16px; font-size: 13px;
+	color: #F0DCB4;
+}
+.banner .head { font-weight: 600; color: var(--warn); }
+.banner .detail { margin-top: 3px; }
+.banner .bar {
+	margin-top: 9px; height: 4px; border-radius: 2px;
+	background: rgba(224,160,48,.22); overflow: hidden;
+}
+.banner .bar span {
+	display: block; height: 100%; background: var(--warn);
+	border-radius: 2px; transition: width .4s ease;
+}
+.hide { display: none; }
